@@ -175,21 +175,67 @@ export default function DashboardClient({ initialPlants, userEmail }) {
 
   // Copier une fiche de bibliothèque vers "Mes plantes"
   function exportLibToPlants(lib) {
+    // Les fiches builtin ont care (objet) + tips/problems (array), les custom ont light/water (string) + tips/problems (texte multi-lignes)
+    const isBuiltin = lib._source === 'builtin';
+    const tipsStr = Array.isArray(lib.tips) ? lib.tips.join('\n') : (lib.tips || '');
+    const problemsStr = Array.isArray(lib.problems) ? lib.problems.join('\n') : (lib.problems || '');
+    const lightStr = isBuiltin ? (lib.care?.Lumière || lib.light || '') : (lib.light || '');
+    const waterStr = isBuiltin ? (lib.care?.Arrosage || lib.water || '') : (lib.water || '');
+
     setEditingPlant({
       id: null, // nouvelle plante
       name: lib.name || '',
       latin: lib.latin || '',
       type: lib.type || '',
       location: '',
-      light: lib.light || '',
-      water: lib.water || '',
-      notes: lib.description || '',
+      light: lightStr,
+      water: waterStr,
+      notes: '',
       photo: lib.photo || null,
       acquired: new Date().toISOString().split('T')[0],
+      description: lib.description || '',
+      plantation: lib.plantation || '',
+      propagation: lib.propagation || '',
+      harvest: lib.harvest || '',
+      companions: lib.companions || '',
+      tips: tipsStr,
+      problems: problemsStr,
     });
     setDetailLib(null);
     setTab('add');
     setMessage({ type: 'success', text: 'Pré-rempli depuis la bibliothèque. Complétez et enregistrez.' });
+    setTimeout(() => setMessage(null), 4000);
+  }
+
+  // Ouvrir le formulaire d'édition d'une fiche bibliothèque.
+  // Pour une fiche custom : édition directe. Pour une fiche builtin : copie en custom (id: null).
+  function editLibraryEntry(lib) {
+    if (lib._source === 'custom') {
+      setEditingLibrary(lib);
+      setDetailLib(null);
+      return;
+    }
+    // Builtin : on pré-remplit une nouvelle fiche custom avec les données
+    const tipsStr = Array.isArray(lib.tips) ? lib.tips.join('\n') : (lib.tips || '');
+    const problemsStr = Array.isArray(lib.problems) ? lib.problems.join('\n') : (lib.problems || '');
+    setEditingLibrary({
+      id: null,
+      name: lib.name || '',
+      latin: lib.latin || '',
+      type: lib.type || '',
+      description: lib.description || '',
+      light: lib.care?.Lumière || lib.light || '',
+      water: lib.care?.Arrosage || lib.water || '',
+      plantation: lib.plantation || '',
+      propagation: lib.propagation || '',
+      harvest: lib.harvest || '',
+      companions: lib.companions || '',
+      tips: tipsStr,
+      problems: problemsStr,
+      photo: lib.photo || null,
+    });
+    setDetailLib(null);
+    setMessage({ type: 'success', text: 'Fiche pré-remplie. Modifiez-la et enregistrez pour créer votre version.' });
     setTimeout(() => setMessage(null), 4000);
   }
 
@@ -226,8 +272,12 @@ export default function DashboardClient({ initialPlants, userEmail }) {
 
   const filteredLibrary = useMemo(() => {
     const s = librarySearch.toLowerCase();
-    const builtin = PLANT_LIBRARY.map(p => ({ ...p, _source: 'builtin' }));
     const custom = customLibrary.map(p => ({ ...p, _source: 'custom' }));
+    // Dédup : si un custom a le même nom (casse insensible) qu'un builtin, on masque le builtin
+    const customNames = new Set(custom.map(p => (p.name || '').trim().toLowerCase()));
+    const builtin = PLANT_LIBRARY
+      .filter(p => !customNames.has((p.name || '').trim().toLowerCase()))
+      .map(p => ({ ...p, _source: 'builtin' }));
     const merged = [...custom, ...builtin];
     return merged.filter(p =>
       !s ||
@@ -518,7 +568,7 @@ export default function DashboardClient({ initialPlants, userEmail }) {
           plant={detailLib}
           onClose={() => setDetailLib(null)}
           onExportToPlants={() => exportLibToPlants(detailLib)}
-          onEdit={detailLib._source === 'custom' ? () => { setEditingLibrary(detailLib); setDetailLib(null); } : null}
+          onEdit={() => editLibraryEntry(detailLib)}
           onDelete={detailLib._source === 'custom' ? () => deleteLibraryPlant(detailLib.id) : null}
         />
       )}
@@ -575,6 +625,15 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
   const [notes, setNotes] = useState(plant?.notes || '');
   const [acquired, setAcquired] = useState(plant?.acquired || new Date().toISOString().split('T')[0]);
   const [photo, setPhoto] = useState(plant?.photo || null);
+  // Champs détaillés (comme dans la bibliothèque)
+  const [description, setDescription] = useState(plant?.description || '');
+  const [plantation, setPlantation] = useState(plant?.plantation || '');
+  const [propagation, setPropagation] = useState(plant?.propagation || '');
+  const [harvest, setHarvest] = useState(plant?.harvest || '');
+  const [companions, setCompanions] = useState(plant?.companions || '');
+  const [tips, setTips] = useState(plant?.tips || '');
+  const [problems, setProblems] = useState(plant?.problems || '');
+  const [showDetails, setShowDetails] = useState(!!(plant?.description || plant?.plantation || plant?.propagation || plant?.harvest || plant?.companions || plant?.tips || plant?.problems));
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -613,6 +672,7 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
     await onSave({
       id: plant?.id,
       name, latin, type, location, light, water, notes, acquired: acquired || null, photo,
+      description, plantation, propagation, harvest, companions, tips, problems,
     });
     setSaving(false);
   }
@@ -685,6 +745,50 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
           <textarea className="textarea" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Observations, conseils persos..." />
         </div>
 
+        <div style={{ marginTop: '1rem', marginBottom: '0.75rem' }}>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setShowDetails(s => !s)}
+            style={{ width: '100%' }}
+          >
+            {showDetails ? '▼ Masquer les détails de culture' : '▶ Ajouter les détails de culture (description, plantation, récolte, conseils...)'}
+          </button>
+        </div>
+
+        {showDetails && (
+          <div style={{ padding: '1rem', background: 'var(--card-bg, #f4f6f2)', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
+            <div className="form-group">
+              <label className="label">Description</label>
+              <textarea className="textarea" value={description} onChange={e => setDescription(e.target.value)} placeholder="Présentation générale de la plante..." />
+            </div>
+            <div className="form-group">
+              <label className="label">Plantation</label>
+              <textarea className="textarea" value={plantation} onChange={e => setPlantation(e.target.value)} placeholder="Période, substrat, profondeur..." />
+            </div>
+            <div className="form-group">
+              <label className="label">Multiplication</label>
+              <textarea className="textarea" value={propagation} onChange={e => setPropagation(e.target.value)} placeholder="Semis, bouturage, division..." />
+            </div>
+            <div className="form-group">
+              <label className="label">Récolte</label>
+              <textarea className="textarea" value={harvest} onChange={e => setHarvest(e.target.value)} placeholder="Quand et comment récolter..." />
+            </div>
+            <div className="form-group">
+              <label className="label">Compagnonnage</label>
+              <textarea className="textarea" value={companions} onChange={e => setCompanions(e.target.value)} placeholder="Plantes amies et à éviter..." />
+            </div>
+            <div className="form-group">
+              <label className="label">Conseils (une ligne par conseil)</label>
+              <textarea className="textarea" value={tips} onChange={e => setTips(e.target.value)} placeholder="Tailler en mars&#10;Pailler l'été" />
+            </div>
+            <div className="form-group">
+              <label className="label">Problèmes fréquents (une ligne par problème)</label>
+              <textarea className="textarea" value={problems} onChange={e => setProblems(e.target.value)} placeholder="Feuilles jaunes : manque d'eau&#10;Taches noires : marsonia" />
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem' }}>
           <button type="submit" className="btn accent" disabled={saving}>{saving ? 'Enregistrement...' : 'Enregistrer'}</button>
           {plant && <button type="button" className="btn" onClick={onCancel}>Annuler</button>}
@@ -703,6 +807,20 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
   );
 
   const acquiredDate = plant.acquired ? new Date(plant.acquired).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : null;
+
+  // Champs affichés : priorité aux données propres de la plante, sinon celles de la bibliothèque (lib)
+  const description = plant.description || (lib ? lib.description : '');
+  const plantation = plant.plantation || (lib ? lib.plantation : '');
+  const propagation = plant.propagation || (lib ? lib.propagation : '');
+  const harvest = plant.harvest || (lib ? lib.harvest : '');
+  const companions = plant.companions || (lib ? lib.companions : '');
+  const tipsArray = plant.tips
+    ? (Array.isArray(plant.tips) ? plant.tips : plant.tips.split('\n').filter(Boolean))
+    : (lib?.tips || []);
+  const problemsArray = plant.problems
+    ? (Array.isArray(plant.problems) ? plant.problems : plant.problems.split('\n').filter(Boolean))
+    : (lib?.problems || []);
+  const hasAnyDetail = description || plantation || propagation || harvest || companions || tipsArray.length > 0 || problemsArray.length > 0 || (lib && lib.care);
 
   return (
     <div className="modal active" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -735,26 +853,33 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
           </div>
         )}
 
-        {lib && (
+        {hasAnyDetail && (
           <>
-            <div className="detail-section">
-              <h3>Fiche de culture</h3>
-              <p style={{ color: 'var(--ink-soft)', marginBottom: '0.75rem' }}>{lib.description}</p>
-              <div className="care-grid">
-                {Object.entries(lib.care).map(([k, v]) => (
-                  <div key={k} className="care-item">
-                    <div className="care-label">{k}</div>
-                    <div className="care-value">{v}</div>
-                  </div>
-                ))}
+            {description && (
+              <div className="detail-section">
+                <h3>Description</h3>
+                <p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{description}</p>
               </div>
-            </div>
-            {lib.plantation && <div className="detail-section"><h3>Plantation</h3><p style={{ color: 'var(--ink-soft)' }}>{lib.plantation}</p></div>}
-            {lib.propagation && <div className="detail-section"><h3>Multiplication</h3><p style={{ color: 'var(--ink-soft)' }}>{lib.propagation}</p></div>}
-            {lib.harvest && <div className="detail-section"><h3>Récolte</h3><p style={{ color: 'var(--ink-soft)' }}>{lib.harvest}</p></div>}
-            {lib.companions && <div className="detail-section"><h3>Compagnonnage</h3><p style={{ color: 'var(--ink-soft)' }}>{lib.companions}</p></div>}
-            <div className="detail-section"><h3>Conseils</h3><ul>{lib.tips.map((t, i) => <li key={i}>{t}</li>)}</ul></div>
-            <div className="detail-section"><h3>Problèmes fréquents</h3><ul>{lib.problems.map((t, i) => <li key={i}>{t}</li>)}</ul></div>
+            )}
+            {lib && lib.care && !plant.description && (
+              <div className="detail-section">
+                <h3>Fiche de culture</h3>
+                <div className="care-grid">
+                  {Object.entries(lib.care).map(([k, v]) => (
+                    <div key={k} className="care-item">
+                      <div className="care-label">{k}</div>
+                      <div className="care-value">{v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {plantation && <div className="detail-section"><h3>Plantation</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plantation}</p></div>}
+            {propagation && <div className="detail-section"><h3>Multiplication</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{propagation}</p></div>}
+            {harvest && <div className="detail-section"><h3>Récolte</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{harvest}</p></div>}
+            {companions && <div className="detail-section"><h3>Compagnonnage</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{companions}</p></div>}
+            {tipsArray.length > 0 && <div className="detail-section"><h3>Conseils</h3><ul>{tipsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
+            {problemsArray.length > 0 && <div className="detail-section"><h3>Problèmes fréquents</h3><ul>{problemsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
           </>
         )}
       </div>
@@ -787,7 +912,7 @@ function LibraryDetailModal({ plant, onClose, onExportToPlants, onEdit, onDelete
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
               {onExportToPlants && <button className="btn sm accent" onClick={onExportToPlants}>+ Ajouter à mes plantes</button>}
-              {onEdit && <button className="btn sm" onClick={onEdit}>Modifier</button>}
+              {onEdit && <button className="btn sm" onClick={onEdit}>{isCustom ? 'Modifier' : 'Modifier (créer ma version)'}</button>}
               {onDelete && <button className="btn sm danger" onClick={onDelete}>Supprimer</button>}
             </div>
           </div>
