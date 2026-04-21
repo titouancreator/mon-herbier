@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS } from '@/lib/data';
+import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant } from '@/lib/data';
 
 const LEAF_SVG = (
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -15,20 +15,61 @@ const LEAF_SVG = (
 
 const MONTHS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
 
+// Redimensionne une image (File) et retourne un Blob JPEG.
+function resizeImage(file, maxW = 1200, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Lecture du fichier impossible'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Image invalide'));
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error('Compression échouée'))),
+          'image/jpeg',
+          quality
+        );
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function DashboardClient({ initialPlants, userEmail }) {
   const router = useRouter();
   const supabase = createClient();
   const [plants, setPlants] = useState(initialPlants);
+  const [customLibrary, setCustomLibrary] = useState([]);
   const [tab, setTab] = useState('catalog');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('');
   const [librarySearch, setLibrarySearch] = useState('');
   const [editingPlant, setEditingPlant] = useState(null);
+  const [editingLibrary, setEditingLibrary] = useState(null);
   const [detailPlant, setDetailPlant] = useState(null);
   const [detailLib, setDetailLib] = useState(null);
   const [selectedSymptoms, setSelectedSymptoms] = useState(new Set());
   const [diagnosisResult, setDiagnosisResult] = useState(null);
   const [message, setMessage] = useState(null);
+
+  // Charger la bibliothèque custom au montage
+  useEffect(() => {
+    refreshCustomLibrary();
+  }, []);
+
+  async function refreshCustomLibrary() {
+    const { data } = await supabase
+      .from('library_plants')
+      .select('*')
+      .order('created_at', { ascending: false });
+    setCustomLibrary(data || []);
+  }
 
   const currentSeason = useMemo(() => {
     const m = new Date().getMonth();
@@ -92,6 +133,89 @@ export default function DashboardClient({ initialPlants, userEmail }) {
     }
   }
 
+  async function saveLibraryPlant(formData) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return false;
+    const payload = { ...formData, user_id: user.id };
+    if (formData.id) {
+      const { error } = await supabase
+        .from('library_plants')
+        .update(payload)
+        .eq('id', formData.id);
+      if (error) {
+        setMessage({ type: 'error', text: 'Erreur : ' + error.message });
+        return false;
+      }
+      setMessage({ type: 'success', text: 'Fiche bibliothèque modifiée' });
+    } else {
+      delete payload.id;
+      const { error } = await supabase.from('library_plants').insert(payload);
+      if (error) {
+        setMessage({ type: 'error', text: 'Erreur : ' + error.message });
+        return false;
+      }
+      setMessage({ type: 'success', text: 'Ajoutée à votre bibliothèque' });
+    }
+    await refreshCustomLibrary();
+    setTimeout(() => setMessage(null), 3000);
+    return true;
+  }
+
+  async function deleteLibraryPlant(id) {
+    if (!confirm('Supprimer cette fiche de votre bibliothèque ?')) return;
+    const { error } = await supabase.from('library_plants').delete().eq('id', id);
+    if (!error) {
+      await refreshCustomLibrary();
+      setEditingLibrary(null);
+      setDetailLib(null);
+      setMessage({ type: 'success', text: 'Fiche supprimée' });
+      setTimeout(() => setMessage(null), 3000);
+    }
+  }
+
+  // Copier une fiche de bibliothèque vers "Mes plantes"
+  function exportLibToPlants(lib) {
+    setEditingPlant({
+      id: null, // nouvelle plante
+      name: lib.name || '',
+      latin: lib.latin || '',
+      type: lib.type || '',
+      location: '',
+      light: lib.light || '',
+      water: lib.water || '',
+      notes: lib.description || '',
+      photo: lib.photo || null,
+      acquired: new Date().toISOString().split('T')[0],
+    });
+    setDetailLib(null);
+    setTab('add');
+    setMessage({ type: 'success', text: 'Pré-rempli depuis la bibliothèque. Complétez et enregistrez.' });
+    setTimeout(() => setMessage(null), 4000);
+  }
+
+  // Copier une plante vers la bibliothèque personnelle
+  function exportPlantToLib(plant) {
+    setEditingLibrary({
+      id: null,
+      name: plant.name || '',
+      latin: plant.latin || '',
+      type: plant.type || '',
+      description: plant.notes || '',
+      light: plant.light || '',
+      water: plant.water || '',
+      plantation: '',
+      propagation: '',
+      harvest: '',
+      companions: '',
+      tips: '',
+      problems: '',
+      photo: plant.photo || null,
+    });
+    setDetailPlant(null);
+    setMessage({ type: 'success', text: 'Fiche pré-remplie. Complétez-la et enregistrez dans la bibliothèque.' });
+    setTimeout(() => setMessage(null), 4000);
+  }
+
   const filteredPlants = useMemo(() => {
     const s = search.toLowerCase();
     return plants.filter(p =>
@@ -102,10 +226,16 @@ export default function DashboardClient({ initialPlants, userEmail }) {
 
   const filteredLibrary = useMemo(() => {
     const s = librarySearch.toLowerCase();
-    return PLANT_LIBRARY.filter(p =>
-      !s || p.name.toLowerCase().includes(s) || p.latin.toLowerCase().includes(s) || p.type.toLowerCase().includes(s)
+    const builtin = PLANT_LIBRARY.map(p => ({ ...p, _source: 'builtin' }));
+    const custom = customLibrary.map(p => ({ ...p, _source: 'custom' }));
+    const merged = [...custom, ...builtin];
+    return merged.filter(p =>
+      !s ||
+      (p.name || '').toLowerCase().includes(s) ||
+      (p.latin || '').toLowerCase().includes(s) ||
+      (p.type || '').toLowerCase().includes(s)
     );
-  }, [librarySearch]);
+  }, [librarySearch, customLibrary]);
 
   const stats = useMemo(() => {
     const byType = plants.reduce((a, p) => { a[p.type] = (a[p.type] || 0) + 1; return a; }, {});
@@ -223,8 +353,9 @@ export default function DashboardClient({ initialPlants, userEmail }) {
         {/* AJOUTER */}
         {tab === 'add' && (
           <PlantForm
-            key={editingPlant?.id || 'new'}
+            key={editingPlant?.id || (editingPlant ? 'prefill' : 'new')}
             plant={editingPlant}
+            supabase={supabase}
             onSave={async (data) => {
               const ok = await savePlant(data);
               if (ok) {
@@ -232,7 +363,7 @@ export default function DashboardClient({ initialPlants, userEmail }) {
                 setTab('catalog');
               }
             }}
-            onDelete={editingPlant ? () => deletePlant(editingPlant.id) : null}
+            onDelete={editingPlant && editingPlant.id ? () => deletePlant(editingPlant.id) : null}
             onCancel={() => setEditingPlant(null)}
           />
         )}
@@ -286,17 +417,23 @@ export default function DashboardClient({ initialPlants, userEmail }) {
         {/* BIBLIOTHÈQUE */}
         {tab === 'lib' && (
           <div className="section">
-            <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, marginBottom: '0.5rem' }}>Bibliothèque ({PLANT_LIBRARY.length} espèces)</h2>
-            <p style={{ color: 'var(--ink-mute)', marginBottom: '1rem', fontSize: '0.92rem' }}>Fiches détaillées avec plantation, entretien, multiplication et problèmes fréquents.</p>
-            <input className="input" placeholder="Rechercher..." value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} style={{ marginBottom: '1rem' }} />
+            <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, marginBottom: '0.5rem' }}>Bibliothèque ({PLANT_LIBRARY.length + customLibrary.length} espèces)</h2>
+            <p style={{ color: 'var(--ink-mute)', marginBottom: '1rem', fontSize: '0.92rem' }}>Fiches détaillées avec plantation, entretien, multiplication et problèmes fréquents. Vos fiches perso sont modifiables.</p>
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <input className="input" placeholder="Rechercher..." value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} style={{ flex: '1 1 180px' }} />
+              <button className="btn accent" onClick={() => setEditingLibrary({ id: null })}>+ Ajouter à la bibliothèque</button>
+            </div>
             <div className="plant-grid">
               {filteredLibrary.map((p, i) => (
-                <div key={i} className="plant-card" onClick={() => setDetailLib(p)}>
-                  <div className="card-img">{LEAF_SVG}</div>
+                <div key={p._source === 'custom' ? `c-${p.id}` : `b-${i}`} className="plant-card" onClick={() => setDetailLib(p)}>
+                  <div className="card-img">{p.photo ? <img src={p.photo} alt={p.name} /> : LEAF_SVG}</div>
                   <div className="card-body">
                     <div className="card-name">{p.name}</div>
-                    <div className="card-latin">{p.latin}</div>
-                    <span className="card-tag">{p.type}</span>
+                    <div className="card-latin">{p.latin || '\u00A0'}</div>
+                    <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                      {p.type && <span className="card-tag">{p.type}</span>}
+                      {p._source === 'custom' && <span className="card-tag" style={{ background: 'var(--accent-soft, #dcebd1)', color: 'var(--accent-dark, #2d5016)' }}>Ma fiche</span>}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -311,6 +448,43 @@ export default function DashboardClient({ initialPlants, userEmail }) {
             <div className="alert success" style={{ marginBottom: '1.25rem' }}>
               Saison actuelle : <strong>{currentSeason.name}</strong> · {MONTHS[new Date().getMonth()]}
             </div>
+
+            {/* TÂCHES POUR VOS PLANTES CETTE SAISON */}
+            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem' }}>Pour vos plantes cette saison</h3>
+            {plants.length === 0 ? (
+              <div className="empty" style={{ marginBottom: '1.5rem' }}>
+                <p style={{ color: 'var(--ink-mute)' }}>Ajoutez des plantes à votre herbier pour voir les tâches à faire pour chacune d'elles.</p>
+              </div>
+            ) : (
+              <div className="plant-grid" style={{ marginBottom: '2rem' }}>
+                {plants.map(p => {
+                  const tasks = getTasksForPlant(p, currentSeason.id);
+                  return (
+                    <div key={p.id} className="season-card" style={{ cursor: 'pointer' }} onClick={() => setDetailPlant(p)}>
+                      <div className="season-head" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ width: 48, height: 48, borderRadius: 'var(--radius-sm)', overflow: 'hidden', flexShrink: 0, background: 'var(--card-bg, #f4f6f2)' }}>
+                          {p.photo ? <img src={p.photo} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : LEAF_SVG}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <h3 style={{ fontSize: '1rem', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</h3>
+                          {p.type && <div className="season-months" style={{ fontSize: '0.8rem' }}>{p.type}</div>}
+                        </div>
+                      </div>
+                      <div className="season-body">
+                        {tasks.length > 0 ? (
+                          <ul>{tasks.map((t, i) => <li key={i}>{t}</li>)}</ul>
+                        ) : (
+                          <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic' }}>Pas de tâche spécifique cette saison. Renseignez la catégorie de la plante pour obtenir des conseils.</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* VUE D'ENSEMBLE DES SAISONS */}
+            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem' }}>Vue d'ensemble des saisons</h3>
             <div className="seasons-grid">
               {SEASONS.map(s => (
                 <div key={s.id} className={`season-card ${s.id === currentSeason.id ? 'current' : ''}`}>
@@ -335,10 +509,33 @@ export default function DashboardClient({ initialPlants, userEmail }) {
           onClose={() => setDetailPlant(null)}
           onEdit={() => { setEditingPlant(detailPlant); setDetailPlant(null); setTab('add'); }}
           onDelete={() => deletePlant(detailPlant.id)}
+          onExportToLib={() => exportPlantToLib(detailPlant)}
         />
       )}
 
-      {detailLib && <LibraryDetailModal plant={detailLib} onClose={() => setDetailLib(null)} />}
+      {detailLib && (
+        <LibraryDetailModal
+          plant={detailLib}
+          onClose={() => setDetailLib(null)}
+          onExportToPlants={() => exportLibToPlants(detailLib)}
+          onEdit={detailLib._source === 'custom' ? () => { setEditingLibrary(detailLib); setDetailLib(null); } : null}
+          onDelete={detailLib._source === 'custom' ? () => deleteLibraryPlant(detailLib.id) : null}
+        />
+      )}
+
+      {editingLibrary !== null && (
+        <LibraryForm
+          key={editingLibrary?.id || 'newlib'}
+          entry={editingLibrary}
+          supabase={supabase}
+          onSave={async (data) => {
+            const ok = await saveLibraryPlant(data);
+            if (ok) setEditingLibrary(null);
+          }}
+          onDelete={editingLibrary && editingLibrary.id ? () => deleteLibraryPlant(editingLibrary.id) : null}
+          onCancel={() => setEditingLibrary(null)}
+        />
+      )}
     </>
   );
 }
@@ -368,7 +565,7 @@ function PlantCard({ plant, onClick }) {
   );
 }
 
-function PlantForm({ plant, onSave, onDelete, onCancel }) {
+function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
   const [name, setName] = useState(plant?.name || '');
   const [latin, setLatin] = useState(plant?.latin || '');
   const [type, setType] = useState(plant?.type || '');
@@ -379,24 +576,35 @@ function PlantForm({ plant, onSave, onDelete, onCancel }) {
   const [acquired, setAcquired] = useState(plant?.acquired || new Date().toISOString().split('T')[0]);
   const [photo, setPhoto] = useState(plant?.photo || null);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   async function handlePhoto(e) {
     const file = e.target.files[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const scale = Math.min(1, 800 / img.width);
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-        setPhoto(canvas.toDataURL('image/jpeg', 0.78));
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
+    setUploading(true);
+    try {
+      const blob = await resizeImage(file, 1200, 0.82);
+      if (!supabase) {
+        // fallback base64 si pas de client supabase (ne devrait pas arriver)
+        const reader = new FileReader();
+        reader.onload = () => setPhoto(reader.result);
+        reader.readAsDataURL(blob);
+        return;
+      }
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Non connecté');
+      const filename = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from('plant-photos')
+        .upload(filename, blob, { contentType: 'image/jpeg', upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('plant-photos').getPublicUrl(filename);
+      setPhoto(publicUrl);
+    } catch (err) {
+      alert("Impossible d'uploader la photo : " + (err.message || err));
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function handleSubmit(e) {
@@ -464,8 +672,12 @@ function PlantForm({ plant, onSave, onDelete, onCancel }) {
 
         <div className="form-group">
           <label className="label">Photo</label>
-          <input className="input" type="file" accept="image/*" capture="environment" onChange={handlePhoto} />
-          {photo && <img src={photo} style={{ marginTop: '0.5rem', maxHeight: 160, borderRadius: 'var(--radius-sm)' }} alt="" />}
+          <input className="input" type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={uploading} />
+          {uploading && <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--ink-mute)' }}>Envoi de la photo en cours...</div>}
+          {photo && !uploading && <img src={photo} style={{ marginTop: '0.5rem', maxHeight: 160, borderRadius: 'var(--radius-sm)' }} alt="" />}
+          {photo && !uploading && (
+            <button type="button" className="btn sm" style={{ marginTop: '0.5rem' }} onClick={() => setPhoto(null)}>Retirer la photo</button>
+          )}
         </div>
 
         <div className="form-group">
@@ -483,7 +695,7 @@ function PlantForm({ plant, onSave, onDelete, onCancel }) {
   );
 }
 
-function PlantDetailModal({ plant, onClose, onEdit, onDelete }) {
+function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
   const lib = PLANT_LIBRARY.find(l =>
     l.name.toLowerCase() === (plant.name || '').toLowerCase() ||
     l.latin.toLowerCase() === (plant.latin || '').toLowerCase() ||
@@ -510,6 +722,7 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete }) {
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
               <button className="btn sm" onClick={onEdit}>Modifier</button>
+              {onExportToLib && <button className="btn sm" onClick={onExportToLib}>→ Bibliothèque</button>}
               <button className="btn sm danger" onClick={onDelete}>Supprimer</button>
             </div>
           </div>
@@ -549,42 +762,194 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete }) {
   );
 }
 
-function LibraryDetailModal({ plant, onClose }) {
+function LibraryDetailModal({ plant, onClose, onExportToPlants, onEdit, onDelete }) {
+  const isCustom = plant._source === 'custom';
+  // Pour les fiches custom, tips/problems sont stockés en texte multi-lignes
+  const tipsArray = Array.isArray(plant.tips) ? plant.tips : (plant.tips ? plant.tips.split('\n').filter(Boolean) : []);
+  const problemsArray = Array.isArray(plant.problems) ? plant.problems : (plant.problems ? plant.problems.split('\n').filter(Boolean) : []);
   return (
     <div className="modal active" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal-inner">
         <button className="modal-close" onClick={onClose}>×</button>
         <div className="detail-hero">
-          <div className="detail-img">{LEAF_SVG}</div>
+          <div className="detail-img">{plant.photo ? <img src={plant.photo} alt={plant.name} /> : LEAF_SVG}</div>
           <div>
             <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.8rem', fontWeight: 400 }}>{plant.name}</h2>
-            <p style={{ fontFamily: 'var(--font-serif)', fontStyle: 'italic', color: 'var(--ink-mute)', marginBottom: '0.75rem' }}>{plant.latin}</p>
-            <span className="card-tag">{plant.type}</span>
-            <p style={{ marginTop: '0.5rem', color: 'var(--ink-soft)' }}>{plant.description}</p>
+            {plant.latin && <p style={{ fontFamily: 'var(--font-serif)', fontStyle: 'italic', color: 'var(--ink-mute)', marginBottom: '0.75rem' }}>{plant.latin}</p>}
+            <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              {plant.type && <span className="card-tag">{plant.type}</span>}
+              {isCustom && <span className="card-tag" style={{ background: 'var(--accent-soft, #dcebd1)', color: 'var(--accent-dark, #2d5016)' }}>Ma fiche</span>}
+            </div>
+            {plant.description && <p style={{ marginTop: '0.5rem', color: 'var(--ink-soft)' }}>{plant.description}</p>}
             <div className="care-grid">
-              <div className="care-item"><div className="care-label">Lumière</div><div className="care-value">{plant.light}</div></div>
-              <div className="care-item"><div className="care-label">Arrosage</div><div className="care-value">{plant.water}</div></div>
+              {plant.light && <div className="care-item"><div className="care-label">Lumière</div><div className="care-value">{plant.light}</div></div>}
+              {plant.water && <div className="care-item"><div className="care-label">Arrosage</div><div className="care-value">{plant.water}</div></div>}
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+              {onExportToPlants && <button className="btn sm accent" onClick={onExportToPlants}>+ Ajouter à mes plantes</button>}
+              {onEdit && <button className="btn sm" onClick={onEdit}>Modifier</button>}
+              {onDelete && <button className="btn sm danger" onClick={onDelete}>Supprimer</button>}
             </div>
           </div>
         </div>
 
-        <div className="detail-section">
-          <h3>Soins détaillés</h3>
-          <div className="care-grid">
-            {Object.entries(plant.care).map(([k, v]) => (
-              <div key={k} className="care-item">
-                <div className="care-label">{k}</div>
-                <div className="care-value">{v}</div>
-              </div>
-            ))}
+        {plant.care && typeof plant.care === 'object' && Object.keys(plant.care).length > 0 && (
+          <div className="detail-section">
+            <h3>Soins détaillés</h3>
+            <div className="care-grid">
+              {Object.entries(plant.care).map(([k, v]) => (
+                <div key={k} className="care-item">
+                  <div className="care-label">{k}</div>
+                  <div className="care-value">{v}</div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-        {plant.plantation && <div className="detail-section"><h3>Plantation</h3><p style={{ color: 'var(--ink-soft)' }}>{plant.plantation}</p></div>}
-        {plant.propagation && <div className="detail-section"><h3>Multiplication</h3><p style={{ color: 'var(--ink-soft)' }}>{plant.propagation}</p></div>}
-        {plant.harvest && <div className="detail-section"><h3>Récolte</h3><p style={{ color: 'var(--ink-soft)' }}>{plant.harvest}</p></div>}
-        {plant.companions && <div className="detail-section"><h3>Compagnonnage</h3><p style={{ color: 'var(--ink-soft)' }}>{plant.companions}</p></div>}
-        <div className="detail-section"><h3>Conseils</h3><ul>{plant.tips.map((t, i) => <li key={i}>{t}</li>)}</ul></div>
-        <div className="detail-section"><h3>Problèmes fréquents</h3><ul>{plant.problems.map((t, i) => <li key={i}>{t}</li>)}</ul></div>
+        )}
+        {plant.plantation && <div className="detail-section"><h3>Plantation</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plant.plantation}</p></div>}
+        {plant.propagation && <div className="detail-section"><h3>Multiplication</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plant.propagation}</p></div>}
+        {plant.harvest && <div className="detail-section"><h3>Récolte</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plant.harvest}</p></div>}
+        {plant.companions && <div className="detail-section"><h3>Compagnonnage</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plant.companions}</p></div>}
+        {tipsArray.length > 0 && <div className="detail-section"><h3>Conseils</h3><ul>{tipsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
+        {problemsArray.length > 0 && <div className="detail-section"><h3>Problèmes fréquents</h3><ul>{problemsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
+      </div>
+    </div>
+  );
+}
+
+function LibraryForm({ entry, supabase, onSave, onDelete, onCancel }) {
+  const [name, setName] = useState(entry?.name || '');
+  const [latin, setLatin] = useState(entry?.latin || '');
+  const [type, setType] = useState(entry?.type || '');
+  const [description, setDescription] = useState(entry?.description || '');
+  const [light, setLight] = useState(entry?.light || '');
+  const [water, setWater] = useState(entry?.water || '');
+  const [plantation, setPlantation] = useState(entry?.plantation || '');
+  const [propagation, setPropagation] = useState(entry?.propagation || '');
+  const [harvest, setHarvest] = useState(entry?.harvest || '');
+  const [companions, setCompanions] = useState(entry?.companions || '');
+  const [tips, setTips] = useState(entry?.tips || '');
+  const [problems, setProblems] = useState(entry?.problems || '');
+  const [photo, setPhoto] = useState(entry?.photo || null);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  async function handlePhoto(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const blob = await resizeImage(file, 1200, 0.82);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Non connecté');
+      const filename = `${user.id}/lib-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from('plant-photos')
+        .upload(filename, blob, { contentType: 'image/jpeg', upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('plant-photos').getPublicUrl(filename);
+      setPhoto(publicUrl);
+    } catch (err) {
+      alert("Impossible d'uploader la photo : " + (err.message || err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    await onSave({
+      id: entry?.id,
+      name, latin, type, description,
+      light, water, plantation, propagation, harvest, companions,
+      tips, problems, photo,
+    });
+    setSaving(false);
+  }
+
+  return (
+    <div className="modal active" onClick={(e) => e.target === e.currentTarget && onCancel()}>
+      <div className="modal-inner">
+        <button className="modal-close" onClick={onCancel}>×</button>
+        <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, marginBottom: '1rem' }}>
+          {entry?.id ? 'Modifier la fiche bibliothèque' : 'Nouvelle fiche bibliothèque'}
+        </h2>
+        <form onSubmit={handleSubmit}>
+          <div className="form-row">
+            <div className="form-group">
+              <label className="label">Nom usuel *</label>
+              <input className="input" value={name} onChange={e => setName(e.target.value)} required />
+            </div>
+            <div className="form-group">
+              <label className="label">Nom latin</label>
+              <input className="input" value={latin} onChange={e => setLatin(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label className="label">Catégorie</label>
+              <select className="select" value={type} onChange={e => setType(e.target.value)}>
+                <option value="">—</option>
+                {['Intérieur', 'Extérieur', 'Fruitier', 'Aromatique', 'Potager', 'Succulente', 'Fleur'].map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="label">Lumière</label>
+              <input className="input" value={light} onChange={e => setLight(e.target.value)} placeholder="Plein soleil, mi-ombre..." />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="label">Arrosage</label>
+            <input className="input" value={water} onChange={e => setWater(e.target.value)} placeholder="Modéré, rare..." />
+          </div>
+
+          <div className="form-group">
+            <label className="label">Description</label>
+            <textarea className="textarea" value={description} onChange={e => setDescription(e.target.value)} />
+          </div>
+
+          <div className="form-group">
+            <label className="label">Photo</label>
+            <input className="input" type="file" accept="image/*" onChange={handlePhoto} disabled={uploading} />
+            {uploading && <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--ink-mute)' }}>Envoi en cours...</div>}
+            {photo && !uploading && <img src={photo} style={{ marginTop: '0.5rem', maxHeight: 160, borderRadius: 'var(--radius-sm)' }} alt="" />}
+            {photo && !uploading && <button type="button" className="btn sm" style={{ marginTop: '0.5rem' }} onClick={() => setPhoto(null)}>Retirer la photo</button>}
+          </div>
+
+          <div className="form-group">
+            <label className="label">Plantation</label>
+            <textarea className="textarea" value={plantation} onChange={e => setPlantation(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="label">Multiplication</label>
+            <textarea className="textarea" value={propagation} onChange={e => setPropagation(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="label">Récolte</label>
+            <textarea className="textarea" value={harvest} onChange={e => setHarvest(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="label">Compagnonnage</label>
+            <textarea className="textarea" value={companions} onChange={e => setCompanions(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="label">Conseils (une ligne par conseil)</label>
+            <textarea className="textarea" value={tips} onChange={e => setTips(e.target.value)} placeholder="Tailler en mars&#10;Pailler l'été" />
+          </div>
+          <div className="form-group">
+            <label className="label">Problèmes fréquents (une ligne par problème)</label>
+            <textarea className="textarea" value={problems} onChange={e => setProblems(e.target.value)} placeholder="Feuilles jaunes : manque eau&#10;Taches noires : marsonia" />
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+            <button type="submit" className="btn accent" disabled={saving || uploading}>{saving ? 'Enregistrement...' : 'Enregistrer'}</button>
+            <button type="button" className="btn" onClick={onCancel}>Annuler</button>
+            {onDelete && <button type="button" className="btn danger" onClick={onDelete}>Supprimer</button>}
+          </div>
+        </form>
       </div>
     </div>
   );
