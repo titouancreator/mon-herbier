@@ -1468,6 +1468,120 @@ function findLibMatch(plant) {
   });
 }
 
+// Decoupe intelligente d'un texte long en bullets quand possible
+function splitTextToBullets(text) {
+  if (!text) return [];
+  // Si retours a la ligne explicites : un bullet par ligne
+  const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
+  if (lines.length > 1) return lines;
+  // Sinon : decoupe sur ". " si ca produit plus de 2 morceaux significatifs
+  const parts = text.split(/\.\s+(?=[A-ZÉÈÀÂÎÔÛ])/g)
+    .map(s => s.trim())
+    .filter(s => s.length > 30);
+  if (parts.length >= 3) {
+    return parts.map(p => p.endsWith('.') ? p : p + '.');
+  }
+  return [];
+}
+
+// Detecte si une ligne est de type "Label : valeur" pour mise en forme speciale
+function parseLabelValue(line) {
+  const m = line.match(/^([A-ZÉÈÀÂÎÔÛ][^:]{2,40})\s*:\s*(.+)$/);
+  if (m) return { label: m[1].trim(), value: m[2].trim() };
+  return null;
+}
+
+// Affiche une rubrique avec icone, titre colore et texte intelligemment decoupe
+function DetailRubric({ icon, title, color, text, forceParagraph }) {
+  const bullets = forceParagraph ? [] : splitTextToBullets(text);
+  return (
+    <div style={{
+      background: 'white',
+      border: `1px solid var(--border)`,
+      borderLeft: `4px solid ${color}`,
+      borderRadius: 'var(--radius-sm)',
+      padding: '0.85rem 1.1rem',
+      marginBottom: '0.85rem',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <h3 style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        margin: '0 0 0.6rem 0',
+        fontSize: '1.05rem',
+        fontWeight: 600,
+        color: color,
+      }}>
+        <span style={{ fontSize: '1.2rem' }}>{icon}</span>
+        {title}
+      </h3>
+      {bullets.length > 0 ? (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+          {bullets.map((b, i) => {
+            const lv = parseLabelValue(b);
+            return (
+              <li key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.92rem', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+                <span style={{ color: color, fontWeight: 700, flexShrink: 0 }}>•</span>
+                <span style={{ flex: 1 }}>
+                  {lv ? (
+                    <><strong style={{ color: 'var(--ink)' }}>{lv.label} :</strong> {lv.value}</>
+                  ) : b}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap', margin: 0, fontSize: '0.92rem', lineHeight: 1.55 }}>{text}</p>
+      )}
+    </div>
+  );
+}
+
+// Variante pour les listes deja prepared (Conseils, Problemes)
+function DetailRubricList({ icon, title, color, items }) {
+  return (
+    <div style={{
+      background: 'white',
+      border: `1px solid var(--border)`,
+      borderLeft: `4px solid ${color}`,
+      borderRadius: 'var(--radius-sm)',
+      padding: '0.85rem 1.1rem',
+      marginBottom: '0.85rem',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <h3 style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.5rem',
+        margin: '0 0 0.6rem 0',
+        fontSize: '1.05rem',
+        fontWeight: 600,
+        color: color,
+      }}>
+        <span style={{ fontSize: '1.2rem' }}>{icon}</span>
+        {title}
+      </h3>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+        {items.map((it, i) => {
+          const lv = parseLabelValue(it);
+          return (
+            <li key={i} style={{ display: 'flex', gap: '0.5rem', fontSize: '0.92rem', color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+              <span style={{ color: color, fontWeight: 700, flexShrink: 0 }}>•</span>
+              <span style={{ flex: 1 }}>
+                {lv ? (
+                  <><strong style={{ color: 'var(--ink)' }}>{lv.label} :</strong> {lv.value}</>
+                ) : it}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
   const lib = findLibMatch(plant);
   const typeDefault = TYPE_DEFAULTS[plant.type] || null;
@@ -1549,21 +1663,11 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
           </div>
         </div>
 
-        {plant.notes && (
-          <div className="detail-section">
-            <h3>Notes personnelles</h3>
-            <p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plant.notes}</p>
-          </div>
-        )}
+        {plant.notes && <DetailRubric icon="✏️" title="Notes personnelles" color="#7a5b9c" text={plant.notes} />}
 
         {hasAnyDetail && (
           <>
-            {description && (
-              <div className="detail-section">
-                <h3>Description</h3>
-                <p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{description}</p>
-              </div>
-            )}
+            {description && <DetailRubric icon="🌱" title="Description" color="#3a7a3a" text={description} forceParagraph />}
             {lib && lib.care && !plant.description && (
               <div className="detail-section">
                 <h3>Fiche de culture</h3>
@@ -1577,12 +1681,16 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
                 </div>
               </div>
             )}
-            {plantation && <div className="detail-section"><h3>Plantation</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{plantation}</p></div>}
-            {propagation && <div className="detail-section"><h3>Multiplication</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{propagation}</p></div>}
-            {harvest && <div className="detail-section"><h3>Récolte</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{harvest}</p></div>}
-            {companions && <div className="detail-section"><h3>Compagnonnage</h3><p style={{ color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{companions}</p></div>}
-            {tipsArray.length > 0 && <div className="detail-section"><h3>Conseils</h3><ul>{tipsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
-            {problemsArray.length > 0 && <div className="detail-section"><h3>Problèmes fréquents</h3><ul>{problemsArray.map((t, i) => <li key={i}>{t}</li>)}</ul></div>}
+            {plantation && <DetailRubric icon="🪴" title="Plantation" color="#8b5a2b" text={plantation} />}
+            {propagation && <DetailRubric icon="🌿" title="Multiplication" color="#2d7a3e" text={propagation} />}
+            {harvest && <DetailRubric icon="🧺" title="Récolte" color="#c89028" text={harvest} />}
+            {companions && <DetailRubric icon="🤝" title="Compagnonnage" color="#2b6f9c" text={companions} />}
+            {tipsArray.length > 0 && (
+              <DetailRubricList icon="💡" title="Conseils" color="#d97706" items={tipsArray} />
+            )}
+            {problemsArray.length > 0 && (
+              <DetailRubricList icon="⚠️" title="Problèmes fréquents" color="#c0392b" items={problemsArray} />
+            )}
           </>
         )}
       </div>
