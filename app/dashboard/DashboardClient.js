@@ -864,12 +864,37 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
   );
 }
 
+// Recommandations génériques par type quand aucune fiche bibliothèque n'est trouvée
+const TYPE_DEFAULTS = {
+  'Intérieur': { light: 'Lumière vive indirecte', water: 'Modéré (1×/semaine)' },
+  'Fruitier': { light: 'Plein soleil (5-6h/jour)', water: 'Régulier en période de fructification' },
+  'Aromatique': { light: 'Soleil à mi-ombre', water: 'Régulier, sol toujours frais' },
+  'Potager': { light: 'Plein soleil', water: 'Régulier au pied' },
+  'Succulente': { light: 'Plein soleil', water: 'Rare (2-3 semaines)' },
+  'Fleur': { light: 'Soleil à mi-ombre', water: 'Modéré régulier' },
+  'Extérieur': { light: 'Selon exposition', water: 'Selon saison' },
+};
+
+function findLibMatch(plant) {
+  const pname = (plant.name || '').toLowerCase();
+  const plat = (plant.latin || '').toLowerCase();
+  return PLANT_LIBRARY.find(l => {
+    const lname = (l.name || '').toLowerCase();
+    const llat = (l.latin || '').toLowerCase();
+    if (!lname && !llat) return false;
+    if (lname && pname && (lname === pname || pname.includes(lname) || lname.includes(pname.split(' ')[0]))) return true;
+    if (llat && plat && (llat === plat || plat.includes(llat.split(' ')[0]) || llat.includes(plat.split(' ')[0]))) return true;
+    if (lname && pname && pname.includes(lname.split(' ')[0])) return true;
+    return false;
+  });
+}
+
 function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
-  const lib = PLANT_LIBRARY.find(l =>
-    l.name.toLowerCase() === (plant.name || '').toLowerCase() ||
-    l.latin.toLowerCase() === (plant.latin || '').toLowerCase() ||
-    (plant.name || '').toLowerCase().includes(l.name.toLowerCase().split(' ')[0])
-  );
+  const lib = findLibMatch(plant);
+  const typeDefault = TYPE_DEFAULTS[plant.type] || null;
+  const recommendedLight = (lib && lib.light) || (typeDefault && typeDefault.light) || '';
+  const recommendedWater = (lib && lib.water) || (typeDefault && typeDefault.water) || '';
+  const recommendedSource = lib ? `fiche ${lib.name}` : (typeDefault ? `type ${plant.type}` : '');
 
   const acquiredDate = plant.acquired ? new Date(plant.acquired).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : null;
 
@@ -900,8 +925,42 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
             {plant.location && <p style={{ marginTop: '0.5rem', fontSize: '0.88rem', color: 'var(--ink-mute)' }}>Emplacement : {plant.location}</p>}
             {acquiredDate && <p style={{ fontSize: '0.88rem', color: 'var(--ink-mute)' }}>Depuis le {acquiredDate}</p>}
             <div className="care-grid">
-              {plant.light && <div className="care-item"><div className="care-label">Lumière</div><div className="care-value">{plant.light}</div></div>}
-              {plant.water && <div className="care-item"><div className="care-label">Arrosage</div><div className="care-value">{plant.water}</div></div>}
+              {plant.light && (
+                <div className="care-item">
+                  <div className="care-label">Lumière</div>
+                  <div className="care-value">{plant.light}</div>
+                  {recommendedLight && recommendedLight.trim().toLowerCase() !== (plant.light || '').trim().toLowerCase() && (
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.78rem', color: 'var(--accent-dark, #2d5016)', background: 'var(--accent-soft, #dcebd1)', borderRadius: '4px', padding: '2px 6px', display: 'inline-block' }} title={`Recommandation issue de la ${recommendedSource}`}>
+                      Conseillé : {recommendedLight}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!plant.light && recommendedLight && (
+                <div className="care-item">
+                  <div className="care-label">Lumière conseillée</div>
+                  <div className="care-value">{recommendedLight}</div>
+                  <div style={{ marginTop: '0.15rem', fontSize: '0.72rem', color: 'var(--ink-mute)' }}>({recommendedSource})</div>
+                </div>
+              )}
+              {plant.water && (
+                <div className="care-item">
+                  <div className="care-label">Arrosage</div>
+                  <div className="care-value">{plant.water}</div>
+                  {recommendedWater && recommendedWater.trim().toLowerCase() !== (plant.water || '').trim().toLowerCase() && (
+                    <div style={{ marginTop: '0.25rem', fontSize: '0.78rem', color: 'var(--accent-dark, #2d5016)', background: 'var(--accent-soft, #dcebd1)', borderRadius: '4px', padding: '2px 6px', display: 'inline-block' }} title={`Recommandation issue de la ${recommendedSource}`}>
+                      Conseillé : {recommendedWater}
+                    </div>
+                  )}
+                </div>
+              )}
+              {!plant.water && recommendedWater && (
+                <div className="care-item">
+                  <div className="care-label">Arrosage conseillé</div>
+                  <div className="care-value">{recommendedWater}</div>
+                  <div style={{ marginTop: '0.15rem', fontSize: '0.72rem', color: 'var(--ink-mute)' }}>({recommendedSource})</div>
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
               <button className="btn sm" onClick={onEdit}>Modifier</button>
