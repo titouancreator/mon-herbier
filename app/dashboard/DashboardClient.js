@@ -664,7 +664,19 @@ function Stat({ label, value }) {
   );
 }
 
+// Icones de soin selon le type (auto, fallback)
+const TYPE_CARE_ICONS = {
+  'Intérieur':  { sun: '☼', sunLabel: 'Lumière vive indirecte', drop: '💧',   dropLabel: 'Modéré (1×/sem)' },
+  'Fruitier':   { sun: '☀', sunLabel: 'Plein soleil',           drop: '💧💧', dropLabel: 'Régulier' },
+  'Aromatique': { sun: '◑', sunLabel: 'Soleil à mi-ombre',      drop: '💧',   dropLabel: 'Sol toujours frais' },
+  'Potager':    { sun: '☀', sunLabel: 'Plein soleil',           drop: '💧💧', dropLabel: 'Régulier au pied' },
+  'Succulente': { sun: '☀', sunLabel: 'Plein soleil',           drop: '·',    dropLabel: 'Rare (2-3 sem)' },
+  'Fleur':      { sun: '◑', sunLabel: 'Soleil à mi-ombre',      drop: '💧',   dropLabel: 'Modéré régulier' },
+  'Extérieur':  { sun: '◐', sunLabel: 'Selon exposition',       drop: '💧',   dropLabel: 'Selon saison' },
+};
+
 function PlantCard({ plant, onClick }) {
+  const care = TYPE_CARE_ICONS[plant.type];
   return (
     <div className="plant-card" onClick={onClick}>
       <div className="card-img">
@@ -673,8 +685,26 @@ function PlantCard({ plant, onClick }) {
       <div className="card-body">
         <div className="card-name">{plant.name}</div>
         <div className="card-latin">{plant.latin || '\u00A0'}</div>
-        {plant.type && <span className="card-tag">{plant.type}</span>}
-        {plant.location && <span className="card-tag">{plant.location}</span>}
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {plant.type && <span className="card-tag">{plant.type}</span>}
+          {plant.location && <span className="card-tag">{plant.location}</span>}
+          {care && (
+            <>
+              <span
+                title={`Lumière conseillée (${plant.type}) : ${care.sunLabel}`}
+                style={{ fontSize: '0.78rem', color: '#8a5b00', background: '#fdf3d8', borderRadius: '4px', padding: '2px 6px', lineHeight: 1.3, whiteSpace: 'nowrap' }}
+              >
+                {care.sun} {care.sunLabel}
+              </span>
+              <span
+                title={`Arrosage conseillé (${plant.type}) : ${care.dropLabel}`}
+                style={{ fontSize: '0.78rem', color: '#1e4f7a', background: '#dbeafe', borderRadius: '4px', padding: '2px 6px', lineHeight: 1.3, whiteSpace: 'nowrap' }}
+              >
+                {care.drop} {care.dropLabel}
+              </span>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
