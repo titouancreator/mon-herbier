@@ -316,7 +316,10 @@ export default function DashboardClient({ initialPlants, userEmail }) {
 
   const stats = useMemo(() => {
     const byType = plants.reduce((a, p) => { a[p.type] = (a[p.type] || 0) + 1; return a; }, {});
-    return { total: plants.length, fruitier: byType['Fruitier'] || 0, interieur: byType['Intérieur'] || 0, aromatique: byType['Aromatique'] || 0 };
+    // Plantes "extérieures" = celles qui sont dehors (Fruitier, Potager, Aromatique exterieur, Fleur, Extérieur)
+    const exterieurTypes = ['Fruitier', 'Potager', 'Fleur', 'Extérieur'];
+    const exterieur = plants.filter(p => exterieurTypes.includes(p.type)).length;
+    return { total: plants.length, fruitier: byType['Fruitier'] || 0, interieur: byType['Intérieur'] || 0, aromatique: byType['Aromatique'] || 0, exterieur };
   }, [plants]);
 
   function toggleSymptom(id) {
@@ -398,6 +401,7 @@ export default function DashboardClient({ initialPlants, userEmail }) {
                 <Stat label="Total" value={stats.total} />
                 <Stat label="Fruitiers" value={stats.fruitier} />
                 <Stat label="Intérieur" value={stats.interieur} />
+                <Stat label="Extérieur" value={stats.exterieur} />
                 <Stat label="Aromatiques" value={stats.aromatique} />
               </div>
             )}
@@ -705,23 +709,53 @@ function plantEmoji(plant) {
   }
 }
 
-// Composant alertes meteo : geolocalisation + Open-Meteo + alertes preventives
+// Villes hardcodees avec coords GPS precises
+const KNOWN_CITIES = {
+  'Chartres':   { lat: 48.4470, lon: 1.4889 },                    // Eure-et-Loir, prefecture
+  'Fruncé':     { lat: 48.4068, lon: 1.2245 },                    // commune Eure-et-Loir 28190 pres de Chartres
+  'Géoloc':     null, // utilise navigator.geolocation
+};
+
+// Composant alertes meteo : selection ville + Open-Meteo + alertes preventives
 function WeatherAlerts({ plants }) {
-  // V2 : approche 100% safe sans useMemo et avec dependances primitives
-  const [coords, setCoords] = useState(null);
-  const [city, setCity] = useState(null);
+  const [selectedCity, setSelectedCity] = useState('Chartres');
+  const [coords, setCoords] = useState(KNOWN_CITIES['Chartres']);
+  const [cityDisplay, setCityDisplay] = useState('Chartres');
   const [forecast, setForecast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
 
+  // Filtrer les plantes par ville selectionnee
+  const cityPlants = useMemo(
+    () => (plants || []).filter(p => !p.city || p.city === selectedCity),
+    [plants, selectedCity]
+  );
+
   useEffect(() => {
-    // Charge depuis localStorage si deja autorise
+    // Charge ville prealablement choisie
     try {
-      const saved = localStorage.getItem('mh-coords');
-      if (saved) setCoords(JSON.parse(saved));
+      const saved = localStorage.getItem('mh-city');
+      if (saved && KNOWN_CITIES[saved] !== undefined) {
+        setSelectedCity(saved);
+        if (KNOWN_CITIES[saved]) {
+          setCoords(KNOWN_CITIES[saved]);
+          setCityDisplay(saved);
+        }
+      }
     } catch (e) {}
   }, []);
+
+  function handleCityChange(city) {
+    setSelectedCity(city);
+    try { localStorage.setItem('mh-city', city); } catch (e) {}
+    if (city === 'Géoloc') {
+      requestLocation();
+    } else {
+      setCoords(KNOWN_CITIES[city]);
+      setCityDisplay(city);
+    }
+  }
 
   useEffect(() => {
     if (!coords) return;
@@ -735,28 +769,30 @@ function WeatherAlerts({ plants }) {
         setLoading(false);
       })
       .catch(e => { setError('Météo indisponible.'); setLoading(false); });
-
-    // Reverse geocoding pour la ville
-    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lon}&format=json&zoom=10&accept-language=fr`)
-      .then(r => r.json())
-      .then(d => setCity(d.address?.city || d.address?.town || d.address?.village || d.address?.county || null))
-      .catch(() => {});
   }, [coords]);
 
   function requestLocation() {
-    if (!navigator.geolocation) { setError('Geolocalisation non disponible.'); return; }
+    if (!navigator.geolocation) { setError('Géolocalisation non disponible.'); return; }
     setLoading(true);
     navigator.geolocation.getCurrentPosition(
       pos => {
-        const c = { lat: pos.coords.latitude.toFixed(3), lon: pos.coords.longitude.toFixed(3) };
+        const c = { lat: parseFloat(pos.coords.latitude.toFixed(3)), lon: parseFloat(pos.coords.longitude.toFixed(3)) };
         setCoords(c);
-        try { localStorage.setItem('mh-coords', JSON.stringify(c)); } catch (e) {}
+        setCityDisplay('Position GPS');
+        // Reverse geocoding optionnel pour afficher le nom de la ville
+        fetch(`https://nominatim.openstreetmap.org/reverse?lat=${c.lat}&lon=${c.lon}&format=json&zoom=10&accept-language=fr`)
+          .then(r => r.json())
+          .then(d => {
+            const n = d.address?.city || d.address?.town || d.address?.village || d.address?.county;
+            if (n) setCityDisplay(n);
+          })
+          .catch(() => {});
       },
       err => {
-        setError('Localisation refusée. Utilisation de Paris par défaut.');
-        const c = { lat: 48.857, lon: 2.352 };
-        setCoords(c);
-        try { localStorage.setItem('mh-coords', JSON.stringify(c)); } catch (e) {}
+        setError('Localisation refusée. Utilisez le menu pour choisir une ville.');
+        setSelectedCity('Chartres');
+        setCoords(KNOWN_CITIES['Chartres']);
+        setCityDisplay('Chartres');
         setLoading(false);
       },
       { timeout: 10000 }
@@ -769,7 +805,7 @@ function WeatherAlerts({ plants }) {
     if (!forecast || !forecast.daily) return [];
     const d = forecast.daily;
     const out = [];
-    const hasTypes = (types) => (plants || []).some(p => types.includes(p?.type));
+    const hasTypes = (types) => (cityPlants || []).some(p => types.includes(p?.type));
     const hasOutdoor = hasTypes(['Fruitier', 'Potager', 'Aromatique', 'Fleur', 'Extérieur']);
     const hasIndoor = hasTypes(['Intérieur', 'Succulente']);
     const days = d.time || [];
@@ -882,7 +918,7 @@ function WeatherAlerts({ plants }) {
       console.error('WeatherAlerts compute error:', e);
       return [];
     }
-  }, [forecast, plants]);
+  }, [forecast, cityPlants]);
 
   const palette = {
     high:   { bg: '#fde7e3', border: '#c0392b', title: '#c0392b' },
@@ -892,37 +928,48 @@ function WeatherAlerts({ plants }) {
 
   return (
     <div className="season-card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: alerts.length > 0 ? 'pointer' : 'default' }}
-           onClick={() => alerts.length > 0 && setCollapsed(c => !c)}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
         <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, margin: 0, marginRight: 'auto' }}>
           ⛅ Alertes météo
-          {city && <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>· {city}</span>}
+          <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>· {cityDisplay}</span>
           {forecast?.current && (
             <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>
               · {Math.round(forecast.current.temperature_2m)}°C maintenant
             </span>
           )}
+          <span style={{ fontSize: '0.78rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>
+            · {cityPlants.length} plante{cityPlants.length > 1 ? 's' : ''} suivie{cityPlants.length > 1 ? 's' : ''}
+          </span>
         </h3>
-        {!coords && (
-          <button className="btn sm accent" onClick={(e) => { e.stopPropagation(); requestLocation(); }}>
-            📍 Activer la météo locale
-          </button>
-        )}
-        {coords && alerts.length > 0 && (
-          <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)' }}>{collapsed ? '▸ déplier' : '▾ replier'}</span>
+        <select
+          className="select"
+          value={selectedCity}
+          onChange={e => handleCityChange(e.target.value)}
+          style={{ width: 'auto', minHeight: 36, fontSize: '0.85rem' }}
+          title="Choisir la ville suivie"
+        >
+          <option value="Chartres">📍 Chartres</option>
+          <option value="Fruncé">📍 Fruncé</option>
+          <option value="Géoloc">🌐 Ma position</option>
+        </select>
+        {alerts.length > 0 && (
+          <button
+            className="btn sm"
+            onClick={() => setCollapsed(c => !c)}
+          >{collapsed ? '▸ déplier' : '▾ replier'}</button>
         )}
       </div>
 
       {error && <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic', marginTop: '0.5rem' }}>{error}</p>}
       {loading && <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', marginTop: '0.5rem' }}>Récupération de la météo…</p>}
 
-      {coords && !loading && alerts.length === 0 && forecast && (
+      {!loading && alerts.length === 0 && forecast && (
         <p style={{ color: 'var(--ink-mute)', fontSize: '0.9rem', marginTop: '0.5rem' }}>
-          ✓ Aucune alerte météo importante pour les 7 prochains jours. Tes plantes peuvent vivre tranquillement.
+          ✓ Aucune alerte météo importante pour les 7 prochains jours à {cityDisplay}. Tes plantes peuvent vivre tranquillement.
         </p>
       )}
 
-      {coords && alerts.length > 0 && !collapsed && (
+      {alerts.length > 0 && !collapsed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.75rem' }}>
           {alerts.map((a, i) => {
             const p = palette[a.level];
@@ -1516,6 +1563,7 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
   const [latin, setLatin] = useState(plant?.latin || '');
   const [type, setType] = useState(plant?.type || '');
   const [location, setLocation] = useState(plant?.location || '');
+  const [city, setCity] = useState(plant?.city || 'Chartres');
   const [light, setLight] = useState(plant?.light || '');
   const [water, setWater] = useState(plant?.water || '');
   const [notes, setNotes] = useState(plant?.notes || '');
@@ -1567,7 +1615,7 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
     setSaving(true);
     await onSave({
       id: plant?.id,
-      name, latin, type, location, light, water, notes, acquired: acquired || null, photo,
+      name, latin, type, location, city, light, water, notes, acquired: acquired || null, photo,
       description, plantation, propagation, harvest, companions, tips, problems,
     });
     setSaving(false);
@@ -1602,6 +1650,17 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
             <label className="label">Emplacement</label>
             <input className="input" value={location} onChange={e => setLocation(e.target.value)} placeholder="Jardin, Salon, Balcon..." />
           </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label className="label">Ville (pour la météo locale)</label>
+            <select className="select" value={city} onChange={e => setCity(e.target.value)}>
+              <option value="Chartres">Chartres</option>
+              <option value="Fruncé">Fruncé</option>
+            </select>
+          </div>
+          <div className="form-group"></div>
         </div>
 
         <div className="form-row">
