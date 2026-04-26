@@ -686,11 +686,16 @@ function PlantScheduleCard({ plant, seasonId, onPlantClick }) {
     recurring.monthly.filter(t => isDone('monthly', t.label)).length +
     seasonalTasks.filter(t => isDone('season', t)).length;
 
+  // Fusion : la rubrique "Cette semaine" regroupe semaine + mois + saison.
+  // Chaque tâche garde un badge de fréquence pour rester lisible.
+  const weeklyMerged = [
+    ...recurring.weekly.map(t => ({ ...t, freq: 'sem', period: 'weekly' })),
+    ...recurring.monthly.map(t => ({ ...t, freq: 'mois', period: 'monthly' })),
+    ...seasonalTasks.map(t => ({ label: t, priority: 'normal', freq: 'saison', period: 'season' })),
+  ];
   const PERIODS = [
-    { key: 'daily', label: 'Aujourd\'hui', color: '#c9302c', tasks: recurring.daily, periodLabel: dayKey },
-    { key: 'weekly', label: 'Cette semaine', color: '#2b6f9c', tasks: recurring.weekly, periodLabel: `Sem du ${weekKey.slice(8)}/${weekKey.slice(5,7)}` },
-    { key: 'monthly', label: 'Ce mois', color: '#8a5b00', tasks: recurring.monthly, periodLabel: MONTHS[today.getMonth()] },
-    { key: 'season', label: 'Cette saison', color: '#3a7a3a', tasks: seasonalTasks.map(t => ({ label: t, priority: 'normal' })), periodLabel: '' },
+    { key: 'daily', label: 'Aujourd\'hui', color: '#c9302c', tasks: recurring.daily.map(t => ({ ...t, period: 'daily' })), periodLabel: dayKey },
+    { key: 'weekly', label: 'Cette semaine et ce mois', color: '#2b6f9c', tasks: weeklyMerged, periodLabel: `Sem du ${weekKey.slice(8)}/${weekKey.slice(5,7)} · ${MONTHS[today.getMonth()]} · ${currentSeason ? '' : ''}` },
   ];
 
   return (
@@ -712,27 +717,37 @@ function PlantScheduleCard({ plant, seasonId, onPlantClick }) {
           {totalTasks === 0 ? (
             <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic' }}>Pas de tâche spécifique. Renseignez le type de la plante pour obtenir des rappels.</p>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: recurring.daily.length > 0 ? '220px 1fr' : '1fr', gap: '1.25rem' }}>
               {PERIODS.map(p => p.tasks.length > 0 && (
                 <div key={p.key}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', borderBottom: `2px solid ${p.color}`, paddingBottom: '0.2rem' }}>
                     <strong style={{ color: p.color, fontSize: '0.92rem' }}>{p.label}</strong>
                     {p.periodLabel && <span style={{ fontSize: '0.72rem', color: 'var(--ink-mute)' }}>· {p.periodLabel}</span>}
                   </div>
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
                     {p.tasks.map((t, i) => {
-                      const done = isDone(p.key, t.label);
+                      const taskPeriod = t.period || p.key;
+                      const done = isDone(taskPeriod, t.label);
+                      const freqColors = { sem: '#dbeafe', mois: '#fdf3d8', saison: '#dcebd1' };
+                      const freqTextColors = { sem: '#1e4f7a', mois: '#8a5b00', saison: '#2d5016' };
                       return (
-                        <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer' }}
-                            onClick={() => toggle(p.key, t.label)}>
-                          <input type="checkbox" checked={done} readOnly style={{ marginTop: '0.2rem', flexShrink: 0, accentColor: p.color }} />
-                          <span style={{
-                            color: done ? 'var(--ink-mute)' : 'var(--ink-soft)',
-                            textDecoration: done ? 'line-through' : 'none',
-                            fontWeight: t.priority === 'high' && !done ? 600 : 400
-                          }}>
-                            {t.priority === 'high' && !done && <span style={{ color: '#c9302c', marginRight: '0.25rem' }}>!</span>}
-                            {t.label}
+                        <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.88rem', cursor: 'pointer' }}
+                            onClick={() => toggle(taskPeriod, t.label)}>
+                          <input type="checkbox" checked={done} readOnly style={{ marginTop: '0.25rem', flexShrink: 0, accentColor: p.color, transform: 'scale(1.1)' }} />
+                          <span style={{ flex: 1 }}>
+                            {t.freq && (
+                              <span style={{ background: freqColors[t.freq] || '#eee', color: freqTextColors[t.freq] || '#333', fontSize: '0.66rem', padding: '1px 6px', borderRadius: '8px', marginRight: '0.4rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                                {t.freq}
+                              </span>
+                            )}
+                            <span style={{
+                              color: done ? 'var(--ink-mute)' : 'var(--ink-soft)',
+                              textDecoration: done ? 'line-through' : 'none',
+                              fontWeight: t.priority === 'high' && !done ? 600 : 400
+                            }}>
+                              {t.priority === 'high' && !done && <span style={{ color: '#c9302c', marginRight: '0.25rem' }}>!</span>}
+                              {t.label}
+                            </span>
                           </span>
                         </li>
                       );
