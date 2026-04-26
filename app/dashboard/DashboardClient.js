@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant, getRecurringTasksForPlant } from '@/lib/data';
+import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant, getRecurringTasksForPlant, getShoppingList } from '@/lib/data';
 
 const LEAF_SVG = (
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -564,8 +564,13 @@ export default function DashboardClient({ initialPlants, userEmail }) {
               Saison actuelle : <strong>{currentSeason.name}</strong> · {MONTHS[new Date().getMonth()]}
             </div>
 
+            {/* VUE D'ENSEMBLE : aujourd'hui / semaine / mois / liste de courses */}
+            {plants.length > 0 && (
+              <CalendarOverview plants={plants} seasonId={currentSeason.id} />
+            )}
+
             {/* CALENDRIER DETAILLE PAR PLANTE */}
-            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem' }}>Rappels par plante (jour · semaine · mois · saison)</h3>
+            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem', marginTop: '2rem' }}>Rappels par plante</h3>
             {plants.length === 0 ? (
               <div className="empty" style={{ marginBottom: '1.5rem' }}>
                 <p style={{ color: 'var(--ink-mute)' }}>Ajoutez des plantes à votre herbier pour voir le calendrier détaillé.</p>
@@ -640,6 +645,201 @@ function Stat({ label, value }) {
     <div className="stat">
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
+    </div>
+  );
+}
+
+// Vue d'ensemble du jardinier : aujourd'hui / semaine / mois / liste de courses
+// Agrege les taches recurrentes de toutes les plantes + propose des achats par saison + types
+function CalendarOverview({ plants, seasonId }) {
+  const overview = useMemo(() => {
+    const today = new Date();
+    const todayDow = today.getDay(); // 0 dim - 6 sam
+    const dayOfWeek = (todayDow + 6) % 7; // 0 lundi - 6 dimanche
+    const allTasks = { daily: [], weekly: [], monthly: [], season: [] };
+
+    for (const p of plants) {
+      const r = getRecurringTasksForPlant(p, seasonId);
+      r.daily.forEach(t => allTasks.daily.push({ ...t, plant: p }));
+      r.weekly.forEach(t => allTasks.weekly.push({ ...t, plant: p }));
+      r.monthly.forEach(t => allTasks.monthly.push({ ...t, plant: p }));
+      const seasonal = getTasksForPlant(p, seasonId);
+      seasonal.forEach(t => allTasks.season.push({ label: t, priority: 'normal', plant: p }));
+    }
+
+    // Aujourd'hui = toutes les daily + un sous-ensemble des weekly suggéré pour aujourd'hui
+    // (on en propose ~1 par jour de la semaine, tournant)
+    const weeklyForToday = allTasks.weekly.filter((_, i) => i % 7 === dayOfWeek);
+
+    return {
+      today: { daily: allTasks.daily, weeklySuggested: weeklyForToday },
+      week: allTasks.weekly,
+      month: allTasks.monthly,
+      season: allTasks.season,
+    };
+  }, [plants, seasonId]);
+
+  const shoppingList = useMemo(() => getShoppingList(plants, seasonId), [plants, seasonId]);
+  const [activeTab, setActiveTab] = useState('today');
+
+  const TABS = [
+    { key: 'today', label: 'Aujourd\'hui', icon: '☀', count: overview.today.daily.length + overview.today.weeklySuggested.length },
+    { key: 'week', label: 'Cette semaine', icon: '◷', count: overview.week.length },
+    { key: 'month', label: 'Ce mois', icon: '⌐', count: overview.month.length },
+    { key: 'season', label: 'Cette saison', icon: '✿', count: overview.season.length },
+    { key: 'shop', label: 'À acheter', icon: '⛁', count: shoppingList.length },
+  ];
+
+  return (
+    <div className="season-card" style={{ marginBottom: '1.5rem', padding: '0' }}>
+      <div style={{ padding: '1rem 1.25rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.3rem', fontWeight: 400, margin: 0 }}>Vue d'ensemble du jardinier</h3>
+        <span style={{ fontSize: '0.8rem', color: 'var(--ink-mute)' }}>· {plants.length} plante{plants.length > 1 ? 's' : ''} suivie{plants.length > 1 ? 's' : ''}</span>
+      </div>
+      <div style={{ display: 'flex', gap: '4px', padding: '0.75rem 1.25rem 0', borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
+        {TABS.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setActiveTab(t.key)}
+            style={{
+              padding: '0.5rem 0.85rem',
+              border: 'none',
+              borderBottom: activeTab === t.key ? '2px solid var(--accent-deep, #2d7a3e)' : '2px solid transparent',
+              background: 'transparent',
+              fontWeight: activeTab === t.key ? 600 : 400,
+              color: activeTab === t.key ? 'var(--accent-deep, #2d7a3e)' : 'var(--ink-mute)',
+              fontSize: '0.9rem',
+              whiteSpace: 'nowrap',
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              marginBottom: '-1px',
+            }}
+          >
+            <span style={{ marginRight: '0.35rem' }}>{t.icon}</span>
+            {t.label}
+            {t.count > 0 && (
+              <span style={{
+                marginLeft: '0.4rem',
+                background: activeTab === t.key ? 'var(--accent-soft, #d8ecd6)' : 'var(--bg-subtle)',
+                color: activeTab === t.key ? 'var(--accent-deep, #2d7a3e)' : 'var(--ink-mute)',
+                padding: '1px 7px',
+                borderRadius: '10px',
+                fontSize: '0.72rem',
+                fontWeight: 600,
+              }}>{t.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: '1rem 1.25rem 1.25rem' }}>
+        {activeTab === 'today' && (
+          <OverviewTaskList
+            sections={[
+              { label: 'À faire chaque jour', tasks: overview.today.daily, color: '#c9302c' },
+              { label: 'Suggestion du jour', tasks: overview.today.weeklySuggested, color: '#2b6f9c' },
+            ].filter(s => s.tasks.length > 0)}
+            emptyText="Rien d'urgent aujourd'hui."
+          />
+        )}
+        {activeTab === 'week' && (
+          <OverviewTaskList sections={[{ label: 'Tâches hebdomadaires', tasks: overview.week, color: '#2b6f9c' }]} emptyText="Pas de tâche hebdomadaire pour cette saison." />
+        )}
+        {activeTab === 'month' && (
+          <OverviewTaskList sections={[{ label: 'Tâches mensuelles', tasks: overview.month, color: '#8a5b00' }]} emptyText="Pas de tâche mensuelle pour cette saison." />
+        )}
+        {activeTab === 'season' && (
+          <OverviewTaskList sections={[{ label: 'Grandes tâches de la saison', tasks: overview.season, color: '#3a7a3a' }]} emptyText="Pas de tâche saisonnière pour ces plantes." />
+        )}
+        {activeTab === 'shop' && (
+          <ShoppingListView items={shoppingList} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OverviewTaskList({ sections, emptyText }) {
+  if (sections.length === 0) {
+    return <p style={{ color: 'var(--ink-mute)', fontSize: '0.9rem', fontStyle: 'italic' }}>{emptyText}</p>;
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {sections.map((section, si) => (
+        <div key={si}>
+          <h4 style={{ fontSize: '0.85rem', color: section.color, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: 600 }}>
+            {section.label}
+          </h4>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {section.tasks.map((t, i) => (
+              <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.9rem', padding: '0.5rem 0.75rem', background: 'var(--bg-subtle, #f4f4f0)', borderRadius: '8px', borderLeft: `3px solid ${section.color}` }}>
+                <span style={{ flex: 1 }}>
+                  {t.priority === 'high' && <span style={{ color: '#c9302c', marginRight: '0.3rem', fontWeight: 700 }}>!</span>}
+                  <span style={{ color: 'var(--ink)' }}>{t.label}</span>
+                  {t.plant && (
+                    <span style={{ color: 'var(--ink-mute)', fontSize: '0.78rem', marginLeft: '0.5rem', fontStyle: 'italic' }}>
+                      → {t.plant.name}
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ShoppingListView({ items }) {
+  const [bought, setBought] = useState({});
+  useEffect(() => {
+    try { const raw = localStorage.getItem('mh-shopping'); if (raw) setBought(JSON.parse(raw)); } catch (e) {}
+  }, []);
+  function toggle(item) {
+    const next = { ...bought, [item]: !bought[item] };
+    setBought(next);
+    try { localStorage.setItem('mh-shopping', JSON.stringify(next)); } catch (e) {}
+  }
+  if (items.length === 0) {
+    return <p style={{ color: 'var(--ink-mute)', fontSize: '0.9rem', fontStyle: 'italic' }}>Rien à acheter pour cette saison selon ton herbier.</p>;
+  }
+  const remaining = items.filter(i => !bought[i.item]).length;
+  return (
+    <div>
+      <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+        Suggestions d'achats pour t'occuper de tes plantes cette saison · <strong>{remaining}/{items.length}</strong> à prévoir
+      </p>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.5rem' }}>
+        {items.map((it, i) => {
+          const done = !!bought[it.item];
+          return (
+            <li key={i}
+              onClick={() => toggle(it.item)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.6rem 0.75rem',
+                background: done ? 'var(--accent-soft, #d8ecd6)' : 'white',
+                border: `1px solid ${done ? 'var(--accent, #2d7a3e)' : 'var(--border)'}`,
+                borderRadius: '10px',
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+              }}
+            >
+              <input type="checkbox" checked={done} readOnly style={{ accentColor: 'var(--accent, #2d7a3e)', flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: done ? 'var(--ink-mute)' : 'var(--ink)', textDecoration: done ? 'line-through' : 'none', fontWeight: 500, fontSize: '0.92rem' }}>
+                  {it.item}
+                </div>
+                <div style={{ color: 'var(--ink-mute)', fontSize: '0.72rem', marginTop: '0.1rem' }}>
+                  pour {it.forTypes.join(', ').toLowerCase()}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
