@@ -695,7 +695,7 @@ function PlantScheduleCard({ plant, seasonId, onPlantClick }) {
   ];
   const PERIODS = [
     { key: 'daily', label: 'Aujourd\'hui', color: '#c9302c', tasks: recurring.daily.map(t => ({ ...t, period: 'daily' })), periodLabel: dayKey },
-    { key: 'weekly', label: 'Cette semaine et ce mois', color: '#2b6f9c', tasks: weeklyMerged, periodLabel: `Sem du ${weekKey.slice(8)}/${weekKey.slice(5,7)} · ${MONTHS[today.getMonth()]} · ${currentSeason ? '' : ''}` },
+    { key: 'weekly', label: 'Cette semaine et ce mois', color: '#2b6f9c', tasks: weeklyMerged, periodLabel: `Sem du ${weekKey.slice(8)}/${weekKey.slice(5,7)} · ${MONTHS[today.getMonth()]}` },
   ];
 
   return (
