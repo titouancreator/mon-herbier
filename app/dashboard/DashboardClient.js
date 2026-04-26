@@ -380,6 +380,7 @@ export default function DashboardClient({ initialPlants, userEmail }) {
             { k: 'diag', label: 'Diagnostic' },
             { k: 'lib', label: 'Bibliothèque' },
             { k: 'cal', label: 'Calendrier' },
+            { k: 'meteo', label: '⛅ Météo' },
           ].map(t => (
             <button
               key={t.k}
@@ -607,6 +608,22 @@ export default function DashboardClient({ initialPlants, userEmail }) {
             </div>
           </div>
         )}
+
+        {/* METEO - onglet dedie avec temps reel + alertes pour Chartres et Fruncé */}
+        {tab === 'meteo' && (
+          <div className="section">
+            <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, marginBottom: '1rem' }}>
+              ⛅ Météo en temps réel
+            </h2>
+            <p style={{ color: 'var(--ink-mute)', fontSize: '0.92rem', marginBottom: '1.5rem' }}>
+              Suivi météo précis pour chacune des deux villes où sont tes plantes. Les alertes tiennent compte des plantes assignées à chaque ville.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem' }}>
+              <CityWeatherPanel cityName="Chartres" plants={plants} />
+              <CityWeatherPanel cityName="Fruncé" plants={plants} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* MODALS */}
@@ -715,6 +732,207 @@ const KNOWN_CITIES = {
   'Fruncé':     { lat: 48.4068, lon: 1.2245 },                    // commune Eure-et-Loir 28190 pres de Chartres
   'Géoloc':     null, // utilise navigator.geolocation
 };
+
+// Codes meteo Open-Meteo (WMO) -> emoji + texte
+function weatherIcon(code) {
+  if (code === 0) return { icon: '☀️', label: 'Ensoleillé' };
+  if (code <= 3) return { icon: '🌤', label: 'Partiellement nuageux' };
+  if (code <= 48) return { icon: '🌫', label: 'Brouillard' };
+  if (code <= 57) return { icon: '🌦', label: 'Bruine' };
+  if (code <= 67) return { icon: '🌧', label: 'Pluie' };
+  if (code <= 77) return { icon: '🌨', label: 'Neige' };
+  if (code <= 82) return { icon: '🌧', label: 'Averses' };
+  if (code <= 86) return { icon: '🌨', label: 'Averses neige' };
+  if (code <= 99) return { icon: '⛈', label: 'Orage' };
+  return { icon: '☁️', label: 'Nuageux' };
+}
+
+// Panneau meteo pour une ville : temps reel + previsions 7j + alertes plantes
+function CityWeatherPanel({ cityName, plants }) {
+  const coords = KNOWN_CITIES[cityName];
+  const [forecast, setForecast] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!coords) return;
+    setLoading(true);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,weather_code,relative_humidity_2m,wind_speed_10m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code&timezone=auto&forecast_days=7`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => { setForecast(data); setLoading(false); })
+      .catch(() => { setError('Météo indisponible'); setLoading(false); });
+  }, [coords?.lat, coords?.lon]);
+
+  // Plantes assignees a cette ville (pour les alertes)
+  const cityPlants = useMemo(
+    () => (plants || []).filter(p => (p.city || 'Chartres') === cityName),
+    [plants, cityName]
+  );
+
+  // Calcule les alertes meteo (memes regles que precedemment, version condensée)
+  const alerts = useMemo(() => {
+    try {
+      if (!forecast?.daily) return [];
+      const d = forecast.daily;
+      const out = [];
+      const tmin = d.temperature_2m_min || [];
+      const tmax = d.temperature_2m_max || [];
+      const precip = d.precipitation_sum || [];
+      const wind = d.wind_speed_10m_max || [];
+      const hasOutdoor = cityPlants.some(p => ['Fruitier','Potager','Aromatique','Fleur','Extérieur'].includes(p.type));
+
+      if (tmin[0] !== undefined && tmin[0] < 0) {
+        out.push({ level: 'high', icon: '❄', title: `Gel cette nuit (${Math.round(tmin[0])}°C)`, action: hasOutdoor ? 'Voile d\'hivernage et rentrer pots gélifs' : 'Surveiller plantes près des fenêtres' });
+      }
+      let hotStreak = 0, maxHot = 0;
+      for (let i = 0; i < Math.min(7, tmax.length); i++) {
+        if (tmax[i] >= 30) { hotStreak++; maxHot = Math.max(maxHot, tmax[i]); } else hotStreak = 0;
+      }
+      if (hotStreak >= 2) {
+        out.push({ level: 'medium', icon: '🔥', title: `Forte chaleur (jusqu'à ${Math.round(maxHot)}°C)`, action: hasOutdoor ? 'Arroser tôt + pailler + ombrer' : 'Brumiser, éloigner du soleil direct' });
+      }
+      const totalRain = precip.slice(0, 3).reduce((a, b) => a + (b || 0), 0);
+      if ((precip[0] || 0) > 20 || totalRain > 40) {
+        out.push({ level: 'medium', icon: '☔', title: `Pluie abondante (${Math.round(totalRain)}mm/3j)`, action: 'Pas d\'arrosage, reporter traitements' });
+      }
+      const wind3 = wind.slice(0, 3);
+      const maxWind = wind3.length > 0 ? Math.max(...wind3) : 0;
+      if (maxWind > 50) {
+        out.push({ level: maxWind > 80 ? 'high' : 'medium', icon: '💨', title: `Vent fort (${Math.round(maxWind)} km/h)`, action: hasOutdoor ? 'Tuteurer + rentrer pots légers' : 'OK pour intérieurs' });
+      }
+      const total7d = precip.reduce((a, b) => a + (b || 0), 0);
+      const avgT = tmax.reduce((a, b) => a + b, 0) / Math.max(1, tmax.length);
+      if (total7d < 5 && avgT > 22) {
+        out.push({ level: 'medium', icon: '☀', title: `Sécheresse (${Math.round(total7d)}mm/7j)`, action: hasOutdoor ? 'Arrosage profond + paillage' : 'Vérifier substrats' });
+      }
+      return out;
+    } catch (e) { return []; }
+  }, [forecast, cityPlants]);
+
+  if (loading) {
+    return (
+      <div className="season-card" style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--ink-mute)' }}>
+        <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.3rem', fontWeight: 400, margin: '0 0 0.5rem 0' }}>📍 {cityName}</h3>
+        <p style={{ fontSize: '0.9rem' }}>Récupération de la météo…</p>
+      </div>
+    );
+  }
+  if (error || !forecast) {
+    return (
+      <div className="season-card" style={{ padding: '1.25rem', textAlign: 'center' }}>
+        <h3>📍 {cityName}</h3>
+        <p style={{ color: 'var(--danger)' }}>{error || 'Indisponible'}</p>
+      </div>
+    );
+  }
+
+  const cur = forecast.current;
+  const curIcon = weatherIcon(cur.weather_code);
+  const days = forecast.daily?.time || [];
+
+  return (
+    <div className="season-card" style={{ padding: 0, overflow: 'hidden' }}>
+      {/* En-tete : ville + meteo actuelle */}
+      <div style={{ padding: '1.25rem 1.5rem', background: 'linear-gradient(135deg, #e0f2fe, #f0fdf4)', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, margin: 0, color: 'var(--ink)' }}>
+              📍 {cityName}
+            </h3>
+            <div style={{ fontSize: '0.78rem', color: 'var(--ink-mute)', marginTop: '0.2rem' }}>
+              {cityPlants.length} plante{cityPlants.length > 1 ? 's' : ''} suivie{cityPlants.length > 1 ? 's' : ''} ici
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: '2.4rem', fontWeight: 600, color: 'var(--ink)', lineHeight: 1 }}>
+              {Math.round(cur.temperature_2m)}°C
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', marginTop: '0.2rem' }}>
+              {curIcon.icon} {curIcon.label}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '1.25rem', marginTop: '0.75rem', fontSize: '0.78rem', color: 'var(--ink-mute)', flexWrap: 'wrap' }}>
+          <span>💧 {cur.relative_humidity_2m}% humidité</span>
+          <span>💨 {Math.round(cur.wind_speed_10m)} km/h vent</span>
+          {cur.precipitation > 0 && <span>☔ {cur.precipitation} mm pluie</span>}
+        </div>
+      </div>
+
+      {/* Previsions 7 jours */}
+      <div style={{ padding: '0.75rem 1rem', overflowX: 'auto' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', minWidth: 'max-content' }}>
+          {days.slice(0, 7).map((day, i) => {
+            const dn = i === 0 ? "Auj." : new Date(day).toLocaleDateString('fr-FR', { weekday: 'short' }).slice(0, 3);
+            const ic = weatherIcon(forecast.daily.weather_code?.[i]);
+            return (
+              <div key={i} style={{ flex: '1 1 auto', minWidth: 60, textAlign: 'center', padding: '0.5rem 0.25rem', borderRadius: '8px', background: i === 0 ? 'var(--accent-soft, #d8ecd6)' : 'transparent' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--ink-mute)', textTransform: 'capitalize', marginBottom: '0.2rem' }}>{dn}</div>
+                <div style={{ fontSize: '1.2rem', lineHeight: 1 }}>{ic.icon}</div>
+                <div style={{ fontSize: '0.78rem', marginTop: '0.25rem' }}>
+                  <strong>{Math.round(forecast.daily.temperature_2m_max?.[i] || 0)}°</strong>
+                  <span style={{ color: 'var(--ink-mute)', marginLeft: '0.2rem' }}>{Math.round(forecast.daily.temperature_2m_min?.[i] || 0)}°</span>
+                </div>
+                {(forecast.daily.precipitation_sum?.[i] || 0) > 0 && (
+                  <div style={{ fontSize: '0.65rem', color: '#2b6f9c', marginTop: '0.15rem' }}>
+                    💧 {Math.round(forecast.daily.precipitation_sum[i])}mm
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Alertes meteo plantes */}
+      <div style={{ padding: '0.75rem 1.25rem 1.25rem', borderTop: '1px solid var(--border)' }}>
+        <h4 style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--ink-soft)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 0.5rem 0' }}>
+          Alertes pour tes plantes
+        </h4>
+        {alerts.length === 0 ? (
+          <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic', margin: 0 }}>
+            ✓ Conditions stables, aucune action urgente.
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {alerts.map((a, i) => (
+              <div key={i} style={{
+                background: a.level === 'high' ? '#fde7e3' : '#fef3e0',
+                borderLeft: `3px solid ${a.level === 'high' ? '#c0392b' : '#d97706'}`,
+                borderRadius: '6px',
+                padding: '0.5rem 0.75rem',
+              }}>
+                <div style={{ fontWeight: 600, fontSize: '0.85rem', color: a.level === 'high' ? '#c0392b' : '#8a5b00' }}>
+                  {a.icon} {a.title}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--ink-soft)', marginTop: '0.2rem' }}>
+                  → {a.action}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Liste compacte des plantes de cette ville */}
+      {cityPlants.length > 0 && (
+        <div style={{ padding: '0.75rem 1.25rem 1rem', borderTop: '1px solid var(--border)', background: 'var(--bg-subtle, #f4f4f0)' }}>
+          <h4 style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--ink-mute)', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 0.5rem 0' }}>
+            Plantes ici
+          </h4>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+            {cityPlants.map(p => (
+              <span key={p.id} style={{ fontSize: '0.78rem', background: 'white', padding: '0.2rem 0.5rem', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                {plantEmoji(p)} {p.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Composant alertes meteo : selection ville + Open-Meteo + alertes preventives
 function WeatherAlerts({ plants }) {
