@@ -569,16 +569,16 @@ export default function DashboardClient({ initialPlants, userEmail }) {
               <CalendarOverview plants={plants} seasonId={currentSeason.id} />
             )}
 
-            {/* CALENDRIER DETAILLE PAR PLANTE */}
+            {/* CALENDRIER DETAILLE PAR PLANTE - tuiles avec photo + slider jour/sem/mois */}
             <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem', marginTop: '2rem' }}>Rappels par plante</h3>
             {plants.length === 0 ? (
               <div className="empty" style={{ marginBottom: '1.5rem' }}>
                 <p style={{ color: 'var(--ink-mute)' }}>Ajoutez des plantes à votre herbier pour voir le calendrier détaillé.</p>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
                 {plants.map(p => (
-                  <PlantScheduleCard key={p.id} plant={p} seasonId={currentSeason.id} onPlantClick={() => setDetailPlant(p)} />
+                  <PlantTaskTile key={p.id} plant={p} seasonId={currentSeason.id} onPlantClick={() => setDetailPlant(p)} />
                 ))}
               </div>
             )}
@@ -649,16 +649,76 @@ function Stat({ label, value }) {
   );
 }
 
+// Emoji selon le nom ou le type de la plante (cherche d'abord par nom)
+function plantEmoji(plant) {
+  const name = (plant?.name || '').toLowerCase();
+  const lat = (plant?.latin || '').toLowerCase();
+  const both = name + ' ' + lat;
+  if (/monstera|philodendron|pothos/.test(both)) return '🪴';
+  if (/orchid/.test(both)) return '🪻';
+  if (/sansevier|aloe|cactus|cact|crass|echeveria|haworthia|succulente/.test(both)) return '🌵';
+  if (/tomate|tomat/.test(both)) return '🍅';
+  if (/fraise|fraisier|fragaria/.test(both)) return '🍓';
+  if (/framboise|framboisier|rubus/.test(both)) return '🫐';
+  if (/citron|orange|calamondin|citrus|kumquat|pamplemousse|mandarin|clementin/.test(both)) return '🍊';
+  if (/pomme|malus/.test(both)) return '🍎';
+  if (/figue|figuier|ficus carica/.test(both)) return '🫒';
+  if (/raisin|vigne|vitis/.test(both)) return '🍇';
+  if (/peche|pecher|prunus persica/.test(both)) return '🍑';
+  if (/cerise|cerisier|prunus avium/.test(both)) return '🍒';
+  if (/poire|poirier/.test(both)) return '🍐';
+  if (/banan|musa/.test(both)) return '🍌';
+  if (/avocat|persea/.test(both)) return '🥑';
+  if (/courgette|cucurbita|courge|potiron|citrouille/.test(both)) return '🥒';
+  if (/carotte|carrot|daucus/.test(both)) return '🥕';
+  if (/salade|lactuca|laitue/.test(both)) return '🥬';
+  if (/radis|raphanus/.test(both)) return '🌶';
+  if (/poivron|piment|capsicum/.test(both)) return '🌶';
+  if (/oignon|allium cepa|ail|poireau|allium/.test(both)) return '🧅';
+  if (/basilic|basil|ocimum/.test(both)) return '🌿';
+  if (/menthe|mentha/.test(both)) return '🌿';
+  if (/persil|petroselinum/.test(both)) return '🌿';
+  if (/ciboulette|schoenoprasum/.test(both)) return '🌿';
+  if (/thym|thymus/.test(both)) return '🌿';
+  if (/romarin|rosmarinus|salvia rosmarinus/.test(both)) return '🌿';
+  if (/lavande|lavandula/.test(both)) return '💜';
+  if (/sauge|salvia/.test(both)) return '🌿';
+  if (/origan|origanum/.test(both)) return '🌿';
+  if (/rose|rosier/.test(both)) return '🌹';
+  if (/tulipe|tulipa/.test(both)) return '🌷';
+  if (/marguerite|tournesol|helianthus/.test(both)) return '🌻';
+  if (/hibiscus|fleur d''hibiscus/.test(both)) return '🌺';
+  if (/pivoine|paeonia|hortensia|hydrangea|geranium|pelargonium/.test(both)) return '🌸';
+  // Fallbacks par type
+  switch (plant?.type) {
+    case 'Intérieur': return '🪴';
+    case 'Fruitier': return '🍎';
+    case 'Aromatique': return '🌿';
+    case 'Potager': return '🥬';
+    case 'Succulente': return '🌵';
+    case 'Fleur': return '🌸';
+    case 'Extérieur': return '🌳';
+    default: return '🌱';
+  }
+}
+
 // Vue d'ensemble du jardinier : aujourd'hui / semaine / mois / liste de courses
 // Agrege les taches recurrentes de toutes les plantes + propose des achats par saison + types
-function CalendarOverview({ plants, seasonId }) {
+function CalendarOverview({ plants, seasonId: defaultSeasonId }) {
+  const [seasonId, setSeasonId] = useState(defaultSeasonId);
+  const [filterPlantId, setFilterPlantId] = useState('');
+  // Filtrage par plante choisie
+  const filteredPlants = useMemo(
+    () => filterPlantId ? plants.filter(p => p.id === filterPlantId) : plants,
+    [plants, filterPlantId]
+  );
   const overview = useMemo(() => {
     const today = new Date();
-    const todayDow = today.getDay(); // 0 dim - 6 sam
-    const dayOfWeek = (todayDow + 6) % 7; // 0 lundi - 6 dimanche
+    const todayDow = today.getDay();
+    const dayOfWeek = (todayDow + 6) % 7;
     const allTasks = { daily: [], weekly: [], monthly: [], season: [] };
 
-    for (const p of plants) {
+    for (const p of filteredPlants) {
       const r = getRecurringTasksForPlant(p, seasonId);
       r.daily.forEach(t => allTasks.daily.push({ ...t, plant: p }));
       r.weekly.forEach(t => allTasks.weekly.push({ ...t, plant: p }));
@@ -667,8 +727,6 @@ function CalendarOverview({ plants, seasonId }) {
       seasonal.forEach(t => allTasks.season.push({ label: t, priority: 'normal', plant: p }));
     }
 
-    // Aujourd'hui = toutes les daily + un sous-ensemble des weekly suggéré pour aujourd'hui
-    // (on en propose ~1 par jour de la semaine, tournant)
     const weeklyForToday = allTasks.weekly.filter((_, i) => i % 7 === dayOfWeek);
 
     return {
@@ -677,9 +735,9 @@ function CalendarOverview({ plants, seasonId }) {
       month: allTasks.monthly,
       season: allTasks.season,
     };
-  }, [plants, seasonId]);
+  }, [filteredPlants, seasonId]);
 
-  const shoppingList = useMemo(() => getShoppingList(plants, seasonId), [plants, seasonId]);
+  const shoppingList = useMemo(() => getShoppingList(filteredPlants, seasonId), [filteredPlants, seasonId]);
   const [activeTab, setActiveTab] = useState('today');
 
   const TABS = [
@@ -692,9 +750,34 @@ function CalendarOverview({ plants, seasonId }) {
 
   return (
     <div className="season-card" style={{ marginBottom: '1.5rem', padding: '0' }}>
-      <div style={{ padding: '1rem 1.25rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.3rem', fontWeight: 400, margin: 0 }}>Vue d'ensemble du jardinier</h3>
-        <span style={{ fontSize: '0.8rem', color: 'var(--ink-mute)' }}>· {plants.length} plante{plants.length > 1 ? 's' : ''} suivie{plants.length > 1 ? 's' : ''}</span>
+      <div style={{ padding: '1rem 1.25rem 0', display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.3rem', fontWeight: 400, margin: 0, marginRight: 'auto' }}>
+          🪴 Vue d'ensemble du jardinier
+        </h3>
+        <select
+          className="select"
+          value={filterPlantId}
+          onChange={e => setFilterPlantId(e.target.value)}
+          style={{ width: 'auto', minHeight: 36, fontSize: '0.85rem' }}
+        >
+          <option value="">Toutes les plantes ({plants.length})</option>
+          {plants.map(p => (
+            <option key={p.id} value={p.id}>{plantEmoji(p)} {p.name}</option>
+          ))}
+        </select>
+        <select
+          className="select"
+          value={seasonId}
+          onChange={e => setSeasonId(e.target.value)}
+          style={{ width: 'auto', minHeight: 36, fontSize: '0.85rem' }}
+          title="Changer la saison consultée"
+        >
+          {SEASONS.map(s => (
+            <option key={s.id} value={s.id}>
+              {s.id === defaultSeasonId ? '⊙ ' : ''}{s.name}
+            </option>
+          ))}
+        </select>
       </div>
       <div style={{ display: 'flex', gap: '4px', padding: '0.75rem 1.25rem 0', borderBottom: '1px solid var(--border)', overflowX: 'auto' }}>
         {TABS.map(t => (
@@ -772,14 +855,17 @@ function OverviewTaskList({ sections, emptyText }) {
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
             {section.tasks.map((t, i) => (
               <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.9rem', padding: '0.5rem 0.75rem', background: 'var(--bg-subtle, #f4f4f0)', borderRadius: '8px', borderLeft: `3px solid ${section.color}` }}>
+                {t.plant && (
+                  <span
+                    title={t.plant.name}
+                    style={{ fontSize: '1.1rem', flexShrink: 0, lineHeight: 1.2 }}
+                  >
+                    {plantEmoji(t.plant)}
+                  </span>
+                )}
                 <span style={{ flex: 1 }}>
                   {t.priority === 'high' && <span style={{ color: '#c9302c', marginRight: '0.3rem', fontWeight: 700 }}>!</span>}
                   <span style={{ color: 'var(--ink)' }}>{t.label}</span>
-                  {t.plant && (
-                    <span style={{ color: 'var(--ink-mute)', fontSize: '0.78rem', marginLeft: '0.5rem', fontStyle: 'italic' }}>
-                      → {t.plant.name}
-                    </span>
-                  )}
                 </span>
               </li>
             ))}
@@ -959,6 +1045,171 @@ function PlantScheduleCard({ plant, seasonId, onPlantClick }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Tuile compacte par plante : photo carrée + slider jour/sem/mois + cases à cocher localStorage
+function PlantTaskTile({ plant, seasonId, onPlantClick }) {
+  const recurring = useMemo(() => getRecurringTasksForPlant(plant, seasonId), [plant, seasonId]);
+  const seasonalTasks = useMemo(() => getTasksForPlant(plant, seasonId), [plant, seasonId]);
+  const [period, setPeriod] = useState('day');
+  const [doneTasks, setDoneTasks] = useState({});
+  const storageKey = `mh-schedule-${plant.id}`;
+
+  const today = new Date();
+  const dayKey = today.toISOString().slice(0, 10);
+  const weekStart = new Date(today); weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const weekKey = weekStart.toISOString().slice(0, 10);
+  const monthKey = today.toISOString().slice(0, 7);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) setDoneTasks(JSON.parse(raw));
+    } catch (e) {}
+  }, [storageKey]);
+
+  function makeKey(p, label) {
+    if (p === 'day') return `d:${dayKey}:${label}`;
+    if (p === 'week') return `w:${weekKey}:${label}`;
+    if (p === 'month') return `m:${monthKey}:${label}`;
+    return `s:${seasonId}:${label}`;
+  }
+  function isDone(p, label) { return !!doneTasks[makeKey(p, label)]; }
+  function toggle(p, label) {
+    const k = makeKey(p, label);
+    const next = { ...doneTasks, [k]: !doneTasks[k] };
+    setDoneTasks(next);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch (e) {}
+  }
+
+  // Pour la vue jour : on combine daily + une rotation des weekly suggérée pour aujourd'hui
+  const todayDow = (today.getDay() + 6) % 7;
+  const weeklySuggested = recurring.weekly.filter((_, i) => i % 7 === todayDow);
+  const tasksByPeriod = {
+    day: { tasks: [...recurring.daily, ...weeklySuggested.map(t => ({ ...t, _source: 'sem' }))], color: '#c9302c', label: "Aujourd'hui", icon: '☀' },
+    week: { tasks: recurring.weekly, color: '#2b6f9c', label: 'Cette semaine', icon: '◷' },
+    month: { tasks: recurring.monthly, color: '#8a5b00', label: 'Ce mois', icon: '⌐' },
+    season: { tasks: seasonalTasks.map(t => ({ label: t, priority: 'normal' })), color: '#3a7a3a', label: 'Saison', icon: '✿' },
+  };
+  const current = tasksByPeriod[period];
+  const totalAll = Object.values(tasksByPeriod).reduce((sum, p) => sum + p.tasks.length, 0);
+  const doneAll = Object.entries(tasksByPeriod).reduce((sum, [k, p]) =>
+    sum + p.tasks.filter(t => isDone(k === 'season' ? 'season' : k, t.label)).length, 0);
+
+  return (
+    <div style={{
+      background: 'white',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      overflow: 'hidden',
+      boxShadow: 'var(--shadow-sm)',
+      display: 'flex',
+      flexDirection: 'column',
+      transition: 'all 0.2s',
+    }}>
+      {/* En-tête : photo carrée + nom + emoji */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', borderBottom: '1px solid var(--border)' }}>
+        <div
+          onClick={onPlantClick}
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 'var(--radius-sm)',
+            overflow: 'hidden',
+            flexShrink: 0,
+            background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)',
+            cursor: 'pointer',
+            border: '1px solid var(--border)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '1.8rem',
+          }}
+        >
+          {plant.photo ? <img src={plant.photo} alt={plant.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : plantEmoji(plant)}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={onPlantClick}>
+          <div style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {plantEmoji(plant)} {plant.name}
+          </div>
+          <div style={{ fontSize: '0.72rem', color: 'var(--ink-mute)' }}>
+            {plant.type}{plant.location ? ` · ${plant.location}` : ''}
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--ink-mute)', marginTop: '0.15rem' }}>
+            {doneAll}/{totalAll} faites
+          </div>
+        </div>
+      </div>
+
+      {/* Slider jour / sem / mois / saison */}
+      <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
+        {['day', 'week', 'month', 'season'].map(p => (
+          <button
+            key={p}
+            onClick={() => setPeriod(p)}
+            style={{
+              flex: 1,
+              padding: '0.5rem 0.25rem',
+              border: 'none',
+              borderBottom: period === p ? `2px solid ${tasksByPeriod[p].color}` : '2px solid transparent',
+              background: period === p ? 'var(--bg-subtle, #f4f4f0)' : 'white',
+              color: period === p ? tasksByPeriod[p].color : 'var(--ink-mute)',
+              fontSize: '0.72rem',
+              fontWeight: period === p ? 600 : 500,
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '2px',
+            }}
+          >
+            <span style={{ fontSize: '0.95rem' }}>{tasksByPeriod[p].icon}</span>
+            <span>{p === 'day' ? 'Jour' : p === 'week' ? 'Sem' : p === 'month' ? 'Mois' : 'Saison'}</span>
+            <span style={{ background: period === p ? tasksByPeriod[p].color : 'var(--bg-subtle)', color: period === p ? 'white' : 'var(--ink-mute)', borderRadius: '8px', padding: '0 5px', fontSize: '0.62rem', minWidth: '14px', display: 'inline-block' }}>
+              {tasksByPeriod[p].tasks.length}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Liste de tâches selon période */}
+      <div style={{ padding: '0.75rem', flex: 1, minHeight: '160px' }}>
+        {current.tasks.length === 0 ? (
+          <p style={{ color: 'var(--ink-mute)', fontSize: '0.82rem', fontStyle: 'italic', textAlign: 'center', padding: '1rem 0' }}>
+            Rien à faire pour cette période.
+          </p>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            {current.tasks.map((t, i) => {
+              const periodKey = period === 'season' ? 'season' : period;
+              const done = isDone(periodKey, t.label);
+              return (
+                <li
+                  key={i}
+                  onClick={() => toggle(periodKey, t.label)}
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', padding: '0.3rem 0.4rem', borderRadius: '6px', transition: 'background 0.15s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-subtle, #f4f4f0)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <input type="checkbox" checked={done} readOnly style={{ marginTop: '0.2rem', flexShrink: 0, accentColor: current.color }} />
+                  <span style={{
+                    color: done ? 'var(--ink-mute)' : 'var(--ink-soft)',
+                    textDecoration: done ? 'line-through' : 'none',
+                    fontWeight: t.priority === 'high' && !done ? 600 : 400,
+                  }}>
+                    {t._source === 'sem' && <span style={{ background: '#dbeafe', color: '#1e4f7a', fontSize: '0.6rem', padding: '1px 5px', borderRadius: '6px', marginRight: '0.3rem', fontWeight: 600 }}>SEM</span>}
+                    {t.priority === 'high' && !done && <span style={{ color: '#c9302c', marginRight: '0.2rem' }}>!</span>}
+                    {t.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
