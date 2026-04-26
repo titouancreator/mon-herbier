@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant } from '@/lib/data';
+import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant, getRecurringTasksForPlant } from '@/lib/data';
 
 const LEAF_SVG = (
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -564,37 +564,17 @@ export default function DashboardClient({ initialPlants, userEmail }) {
               Saison actuelle : <strong>{currentSeason.name}</strong> · {MONTHS[new Date().getMonth()]}
             </div>
 
-            {/* TÂCHES POUR VOS PLANTES CETTE SAISON */}
-            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem' }}>Pour vos plantes cette saison</h3>
+            {/* CALENDRIER DETAILLE PAR PLANTE */}
+            <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.75rem' }}>Rappels par plante (jour · semaine · mois · saison)</h3>
             {plants.length === 0 ? (
               <div className="empty" style={{ marginBottom: '1.5rem' }}>
-                <p style={{ color: 'var(--ink-mute)' }}>Ajoutez des plantes à votre herbier pour voir les tâches à faire pour chacune d'elles.</p>
+                <p style={{ color: 'var(--ink-mute)' }}>Ajoutez des plantes à votre herbier pour voir le calendrier détaillé.</p>
               </div>
             ) : (
-              <div className="plant-grid" style={{ marginBottom: '2rem' }}>
-                {plants.map(p => {
-                  const tasks = getTasksForPlant(p, currentSeason.id);
-                  return (
-                    <div key={p.id} className="season-card" style={{ cursor: 'pointer' }} onClick={() => setDetailPlant(p)}>
-                      <div className="season-head" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                        <div style={{ width: 48, height: 48, borderRadius: 'var(--radius-sm)', overflow: 'hidden', flexShrink: 0, background: 'var(--card-bg, #f4f6f2)' }}>
-                          {p.photo ? <img src={p.photo} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : LEAF_SVG}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <h3 style={{ fontSize: '1rem', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</h3>
-                          {p.type && <div className="season-months" style={{ fontSize: '0.8rem' }}>{p.type}</div>}
-                        </div>
-                      </div>
-                      <div className="season-body">
-                        {tasks.length > 0 ? (
-                          <ul>{tasks.map((t, i) => <li key={i}>{t}</li>)}</ul>
-                        ) : (
-                          <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic' }}>Pas de tâche spécifique cette saison. Renseignez la catégorie de la plante pour obtenir des conseils.</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
+                {plants.map(p => (
+                  <PlantScheduleCard key={p.id} plant={p} seasonId={currentSeason.id} onPlantClick={() => setDetailPlant(p)} />
+                ))}
               </div>
             )}
 
@@ -664,6 +644,110 @@ function Stat({ label, value }) {
   );
 }
 
+// Carte calendrier d'une plante : tâches jour / semaine / mois / saison
+// Les cases cochées sont sauvegardees dans localStorage par plante + tache + periode (jour ISO / semaine ISO / mois)
+function PlantScheduleCard({ plant, seasonId, onPlantClick }) {
+  const recurring = useMemo(() => getRecurringTasksForPlant(plant, seasonId), [plant, seasonId]);
+  const seasonalTasks = useMemo(() => getTasksForPlant(plant, seasonId), [plant, seasonId]);
+
+  const today = new Date();
+  const dayKey = today.toISOString().slice(0, 10);
+  // Numéro semaine ISO simplifié
+  const weekStart = new Date(today); weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const weekKey = weekStart.toISOString().slice(0, 10);
+  const monthKey = today.toISOString().slice(0, 7);
+
+  const [doneTasks, setDoneTasks] = useState({});
+  const [collapsed, setCollapsed] = useState(false);
+  const storageKey = `mh-schedule-${plant.id}`;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) setDoneTasks(JSON.parse(raw));
+    } catch (e) { /* ignore */ }
+  }, [storageKey]);
+
+  function toggle(period, label) {
+    const key = period === 'daily' ? `d:${dayKey}:${label}` : period === 'weekly' ? `w:${weekKey}:${label}` : period === 'monthly' ? `m:${monthKey}:${label}` : `s:${seasonId}:${label}`;
+    const next = { ...doneTasks, [key]: !doneTasks[key] };
+    setDoneTasks(next);
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch (e) { /* ignore */ }
+  }
+  function isDone(period, label) {
+    const key = period === 'daily' ? `d:${dayKey}:${label}` : period === 'weekly' ? `w:${weekKey}:${label}` : period === 'monthly' ? `m:${monthKey}:${label}` : `s:${seasonId}:${label}`;
+    return !!doneTasks[key];
+  }
+
+  const totalTasks = recurring.daily.length + recurring.weekly.length + recurring.monthly.length + seasonalTasks.length;
+  const doneCount =
+    recurring.daily.filter(t => isDone('daily', t.label)).length +
+    recurring.weekly.filter(t => isDone('weekly', t.label)).length +
+    recurring.monthly.filter(t => isDone('monthly', t.label)).length +
+    seasonalTasks.filter(t => isDone('season', t)).length;
+
+  const PERIODS = [
+    { key: 'daily', label: 'Aujourd\'hui', color: '#c9302c', tasks: recurring.daily, periodLabel: dayKey },
+    { key: 'weekly', label: 'Cette semaine', color: '#2b6f9c', tasks: recurring.weekly, periodLabel: `Sem du ${weekKey.slice(8)}/${weekKey.slice(5,7)}` },
+    { key: 'monthly', label: 'Ce mois', color: '#8a5b00', tasks: recurring.monthly, periodLabel: MONTHS[today.getMonth()] },
+    { key: 'season', label: 'Cette saison', color: '#3a7a3a', tasks: seasonalTasks.map(t => ({ label: t, priority: 'normal' })), periodLabel: '' },
+  ];
+
+  return (
+    <div className="season-card" style={{ overflow: 'hidden' }}>
+      <div className="season-head" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', cursor: 'pointer' }} onClick={() => setCollapsed(c => !c)}>
+        <div onClick={(e) => { e.stopPropagation(); onPlantClick(); }} style={{ width: 56, height: 56, borderRadius: 'var(--radius-sm)', overflow: 'hidden', flexShrink: 0, background: 'var(--card-bg, #f4f6f2)', cursor: 'pointer' }}>
+          {plant.photo ? <img src={plant.photo} alt={plant.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : LEAF_SVG}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h3 style={{ fontSize: '1.05rem', margin: 0 }}>{plant.name}</h3>
+          <div className="season-months" style={{ fontSize: '0.8rem' }}>
+            {plant.type}{plant.location ? ` · ${plant.location}` : ''} · {doneCount}/{totalTasks} tâches faites
+          </div>
+        </div>
+        <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)' }}>{collapsed ? '▸ déplier' : '▾ replier'}</span>
+      </div>
+      {!collapsed && (
+        <div className="season-body">
+          {totalTasks === 0 ? (
+            <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic' }}>Pas de tâche spécifique. Renseignez le type de la plante pour obtenir des rappels.</p>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+              {PERIODS.map(p => p.tasks.length > 0 && (
+                <div key={p.key}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', borderBottom: `2px solid ${p.color}`, paddingBottom: '0.2rem' }}>
+                    <strong style={{ color: p.color, fontSize: '0.92rem' }}>{p.label}</strong>
+                    {p.periodLabel && <span style={{ fontSize: '0.72rem', color: 'var(--ink-mute)' }}>· {p.periodLabel}</span>}
+                  </div>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    {p.tasks.map((t, i) => {
+                      const done = isDone(p.key, t.label);
+                      return (
+                        <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer' }}
+                            onClick={() => toggle(p.key, t.label)}>
+                          <input type="checkbox" checked={done} readOnly style={{ marginTop: '0.2rem', flexShrink: 0, accentColor: p.color }} />
+                          <span style={{
+                            color: done ? 'var(--ink-mute)' : 'var(--ink-soft)',
+                            textDecoration: done ? 'line-through' : 'none',
+                            fontWeight: t.priority === 'high' && !done ? 600 : 400
+                          }}>
+                            {t.priority === 'high' && !done && <span style={{ color: '#c9302c', marginRight: '0.25rem' }}>!</span>}
+                            {t.label}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Icones de soin selon le type (auto, fallback)
 const TYPE_CARE_ICONS = {
   'Intérieur':  { sun: '☼', sunLabel: 'Lumière vive indirecte', drop: '💧',   dropLabel: 'Modéré (1×/sem)' },
@@ -687,7 +771,6 @@ function PlantCard({ plant, onClick }) {
         <div className="card-latin">{plant.latin || '\u00A0'}</div>
         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
           {plant.type && <span className="card-tag">{plant.type}</span>}
-          {plant.location && <span className="card-tag">{plant.location}</span>}
           {care && (
             <>
               <span
