@@ -49,7 +49,11 @@ export default function DashboardClient({ initialPlants, userEmail }) {
   const [tab, setTab] = useState('catalog');
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [filterLocation, setFilterLocation] = useState('');
+  const [sortMode, setSortMode] = useState('recent');
   const [librarySearch, setLibrarySearch] = useState('');
+  const [libFilterType, setLibFilterType] = useState('');
+  const [libFilterSource, setLibFilterSource] = useState('all');
   const [editingPlant, setEditingPlant] = useState(null);
   const [editingLibrary, setEditingLibrary] = useState(null);
   const [detailPlant, setDetailPlant] = useState(null);
@@ -262,13 +266,33 @@ export default function DashboardClient({ initialPlants, userEmail }) {
     setTimeout(() => setMessage(null), 4000);
   }
 
+  const availableLocations = useMemo(() => {
+    const set = new Set();
+    plants.forEach(p => { if (p.location) set.add(p.location); });
+    return Array.from(set).sort();
+  }, [plants]);
+
   const filteredPlants = useMemo(() => {
     const s = search.toLowerCase();
-    return plants.filter(p =>
-      (!s || p.name.toLowerCase().includes(s) || (p.latin || '').toLowerCase().includes(s)) &&
-      (!filterType || p.type === filterType)
+    const filtered = plants.filter(p =>
+      (!s || p.name.toLowerCase().includes(s) || (p.latin || '').toLowerCase().includes(s) || (p.location || '').toLowerCase().includes(s)) &&
+      (!filterType || p.type === filterType) &&
+      (!filterLocation || p.location === filterLocation)
     );
-  }, [plants, search, filterType]);
+    const sorted = [...filtered];
+    if (sortMode === 'az') sorted.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'fr'));
+    else if (sortMode === 'za') sorted.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'fr'));
+    else if (sortMode === 'old') sorted.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+    else if (sortMode === 'recent') sorted.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    return sorted;
+  }, [plants, search, filterType, filterLocation, sortMode]);
+
+  const libraryTypes = useMemo(() => {
+    const set = new Set();
+    PLANT_LIBRARY.forEach(p => { if (p.type) set.add(p.type); });
+    customLibrary.forEach(p => { if (p.type) set.add(p.type); });
+    return Array.from(set).sort();
+  }, [customLibrary]);
 
   const filteredLibrary = useMemo(() => {
     const s = librarySearch.toLowerCase();
@@ -278,14 +302,17 @@ export default function DashboardClient({ initialPlants, userEmail }) {
     const builtin = PLANT_LIBRARY
       .filter(p => !customNames.has((p.name || '').trim().toLowerCase()))
       .map(p => ({ ...p, _source: 'builtin' }));
-    const merged = [...custom, ...builtin];
+    let merged = [...custom, ...builtin];
+    if (libFilterSource === 'custom') merged = merged.filter(p => p._source === 'custom');
+    else if (libFilterSource === 'builtin') merged = merged.filter(p => p._source === 'builtin');
     return merged.filter(p =>
-      !s ||
-      (p.name || '').toLowerCase().includes(s) ||
-      (p.latin || '').toLowerCase().includes(s) ||
-      (p.type || '').toLowerCase().includes(s)
+      (!s ||
+        (p.name || '').toLowerCase().includes(s) ||
+        (p.latin || '').toLowerCase().includes(s) ||
+        (p.type || '').toLowerCase().includes(s)) &&
+      (!libFilterType || p.type === libFilterType)
     );
-  }, [librarySearch, customLibrary]);
+  }, [librarySearch, customLibrary, libFilterType, libFilterSource]);
 
   const stats = useMemo(() => {
     const byType = plants.reduce((a, p) => { a[p.type] = (a[p.type] || 0) + 1; return a; }, {});
@@ -374,12 +401,30 @@ export default function DashboardClient({ initialPlants, userEmail }) {
                 <Stat label="Aromatiques" value={stats.aromatique} />
               </div>
             )}
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-              <input className="input" placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)} style={{ flex: '1 1 180px' }} />
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input className="input" placeholder="Rechercher (nom, latin, emplacement)..." value={search} onChange={e => setSearch(e.target.value)} style={{ flex: '1 1 220px' }} />
               <select className="select" value={filterType} onChange={e => setFilterType(e.target.value)} style={{ width: 'auto' }}>
-                <option value="">Toutes</option>
+                <option value="">Tous types</option>
                 {['Intérieur', 'Extérieur', 'Fruitier', 'Aromatique', 'Potager', 'Succulente', 'Fleur'].map(t => <option key={t}>{t}</option>)}
               </select>
+              <select className="select" value={filterLocation} onChange={e => setFilterLocation(e.target.value)} style={{ width: 'auto' }} disabled={availableLocations.length === 0}>
+                <option value="">Tous emplacements</option>
+                {availableLocations.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+              <select className="select" value={sortMode} onChange={e => setSortMode(e.target.value)} style={{ width: 'auto' }}>
+                <option value="recent">Plus récentes</option>
+                <option value="old">Plus anciennes</option>
+                <option value="az">A → Z</option>
+                <option value="za">Z → A</option>
+              </select>
+              {(search || filterType || filterLocation || sortMode !== 'recent') && (
+                <button
+                  className="btn sm"
+                  onClick={() => { setSearch(''); setFilterType(''); setFilterLocation(''); setSortMode('recent'); }}
+                  title="Réinitialiser les filtres"
+                >Réinitialiser</button>
+              )}
+              <span style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', marginLeft: 'auto' }}>{filteredPlants.length} / {plants.length}</span>
             </div>
 
             {plants.length === 0 ? (
@@ -469,10 +514,29 @@ export default function DashboardClient({ initialPlants, userEmail }) {
           <div className="section">
             <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.5rem', fontWeight: 400, marginBottom: '0.5rem' }}>Bibliothèque ({PLANT_LIBRARY.length + customLibrary.length} espèces)</h2>
             <p style={{ color: 'var(--ink-mute)', marginBottom: '1rem', fontSize: '0.92rem' }}>Fiches détaillées avec plantation, entretien, multiplication et problèmes fréquents. Vos fiches perso sont modifiables.</p>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-              <input className="input" placeholder="Rechercher..." value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} style={{ flex: '1 1 180px' }} />
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input className="input" placeholder="Rechercher (nom, latin, type)..." value={librarySearch} onChange={e => setLibrarySearch(e.target.value)} style={{ flex: '1 1 220px' }} />
+              <select className="select" value={libFilterType} onChange={e => setLibFilterType(e.target.value)} style={{ width: 'auto' }}>
+                <option value="">Tous types</option>
+                {libraryTypes.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <select className="select" value={libFilterSource} onChange={e => setLibFilterSource(e.target.value)} style={{ width: 'auto' }}>
+                <option value="all">Toutes sources</option>
+                <option value="custom">Mes fiches</option>
+                <option value="builtin">Par défaut</option>
+              </select>
+              {(librarySearch || libFilterType || libFilterSource !== 'all') && (
+                <button
+                  className="btn sm"
+                  onClick={() => { setLibrarySearch(''); setLibFilterType(''); setLibFilterSource('all'); }}
+                >Réinitialiser</button>
+              )}
+              <span style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', marginLeft: 'auto' }}>{filteredLibrary.length} fiches</span>
               <button className="btn accent" onClick={() => setEditingLibrary({ id: null })}>+ Ajouter à la bibliothèque</button>
             </div>
+            {filteredLibrary.length === 0 ? (
+              <div className="empty"><h3>Aucune fiche</h3><p>Aucune fiche ne correspond à ces filtres.</p></div>
+            ) : (
             <div className="plant-grid">
               {filteredLibrary.map((p, i) => (
                 <div key={p._source === 'custom' ? `c-${p.id}` : `b-${i}`} className="plant-card" onClick={() => setDetailLib(p)}>
@@ -488,6 +552,7 @@ export default function DashboardClient({ initialPlants, userEmail }) {
                 </div>
               ))}
             </div>
+            )}
           </div>
         )}
 
