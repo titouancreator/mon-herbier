@@ -564,6 +564,9 @@ export default function DashboardClient({ initialPlants, userEmail }) {
               Saison actuelle : <strong>{currentSeason.name}</strong> · {MONTHS[new Date().getMonth()]}
             </div>
 
+            {/* ALERTES METEO : prevention basee sur la meteo locale */}
+            <WeatherAlerts plants={plants} />
+
             {/* VUE D'ENSEMBLE : aujourd'hui / semaine / mois / liste de courses */}
             {plants.length > 0 && (
               <CalendarOverview plants={plants} seasonId={currentSeason.id} />
@@ -700,6 +703,244 @@ function plantEmoji(plant) {
     case 'Extérieur': return '🌳';
     default: return '🌱';
   }
+}
+
+// Composant alertes meteo : geolocalisation + Open-Meteo + alertes preventives
+function WeatherAlerts({ plants }) {
+  const [coords, setCoords] = useState(null);
+  const [city, setCity] = useState(null);
+  const [forecast, setForecast] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    // Charge depuis localStorage si deja autorise
+    try {
+      const saved = localStorage.getItem('mh-coords');
+      if (saved) setCoords(JSON.parse(saved));
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    if (!coords) return;
+    setLoading(true);
+    setError(null);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,weather_code&current=temperature_2m,weather_code&timezone=auto&forecast_days=7`;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        setForecast(data);
+        setLoading(false);
+      })
+      .catch(e => { setError('Météo indisponible.'); setLoading(false); });
+
+    // Reverse geocoding pour la ville
+    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lon}&format=json&zoom=10&accept-language=fr`)
+      .then(r => r.json())
+      .then(d => setCity(d.address?.city || d.address?.town || d.address?.village || d.address?.county || null))
+      .catch(() => {});
+  }, [coords]);
+
+  function requestLocation() {
+    if (!navigator.geolocation) { setError('Geolocalisation non disponible.'); return; }
+    setLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const c = { lat: pos.coords.latitude.toFixed(3), lon: pos.coords.longitude.toFixed(3) };
+        setCoords(c);
+        try { localStorage.setItem('mh-coords', JSON.stringify(c)); } catch (e) {}
+      },
+      err => {
+        setError('Localisation refusée. Utilisation de Paris par défaut.');
+        const c = { lat: 48.857, lon: 2.352 };
+        setCoords(c);
+        try { localStorage.setItem('mh-coords', JSON.stringify(c)); } catch (e) {}
+        setLoading(false);
+      },
+      { timeout: 10000 }
+    );
+  }
+
+  // Calcule les alertes basees sur les previsions et les types de plantes
+  const alerts = useMemo(() => {
+    if (!forecast || !forecast.daily) return [];
+    const d = forecast.daily;
+    const out = [];
+    const hasTypes = (types) => plants.some(p => types.includes(p.type));
+    const hasOutdoor = hasTypes(['Fruitier', 'Potager', 'Aromatique', 'Fleur', 'Extérieur']);
+    const hasIndoor = hasTypes(['Intérieur', 'Succulente']);
+    const days = d.time || [];
+
+    // Gel cette nuit (J0)
+    if (d.temperature_2m_min[0] !== undefined && d.temperature_2m_min[0] < 0) {
+      out.push({
+        level: d.temperature_2m_min[0] < -3 ? 'high' : 'medium',
+        icon: '❄',
+        title: `Gel cette nuit (${Math.round(d.temperature_2m_min[0])}°C)`,
+        actions: [
+          hasOutdoor && 'Couvrir les jeunes plants et fleurs sensibles avec un voile d\'hivernage',
+          hasOutdoor && 'Pailler épais le pied des fruitiers en floraison',
+          hasOutdoor && 'Rentrer les pots gélifs (agrumes, géraniums, basilic, plantes méditerranéennes)',
+          'Laisser allumée une lampe basse consommation dans la véranda non chauffée',
+        ].filter(Boolean),
+      });
+    }
+    // Gel prevu dans les jours suivants
+    for (let i = 1; i < Math.min(4, days.length); i++) {
+      if (d.temperature_2m_min[i] !== undefined && d.temperature_2m_min[i] < 0) {
+        const dayName = new Date(days[i]).toLocaleDateString('fr-FR', { weekday: 'long' });
+        out.push({
+          level: d.temperature_2m_min[i] < -3 ? 'high' : 'medium',
+          icon: '🌡',
+          title: `Gel ${dayName} (${Math.round(d.temperature_2m_min[i])}°C)`,
+          actions: [
+            'Préparer les voiles d\'hivernage et les cloches',
+            hasOutdoor && 'Surveiller les plants en floraison (fruitiers, légumes du potager)',
+          ].filter(Boolean),
+        });
+        break; // une seule alerte gel pour les jours suivants
+      }
+    }
+    // Canicule : 3 jours consecutifs > 30°C
+    let hotStreak = 0;
+    let maxHot = 0;
+    for (let i = 0; i < Math.min(7, days.length); i++) {
+      if (d.temperature_2m_max[i] >= 30) { hotStreak++; maxHot = Math.max(maxHot, d.temperature_2m_max[i]); }
+      else { hotStreak = 0; }
+    }
+    if (hotStreak >= 2) {
+      out.push({
+        level: hotStreak >= 4 ? 'high' : 'medium',
+        icon: '🔥',
+        title: `Forte chaleur prévue (jusqu'à ${Math.round(maxHot)}°C)`,
+        actions: [
+          hasOutdoor && 'Arroser tôt le matin OU le soir, en profondeur, jamais sur le feuillage',
+          hasOutdoor && 'Pailler généreusement (paille, BRF, tontes sèches) pour conserver l\'humidité',
+          hasOutdoor && 'Ombrer les jeunes plants avec un voile d\'ombrage 30-50%',
+          hasIndoor && 'Brumiser les plantes d\'intérieur, éloigner des fenêtres en plein soleil',
+          hasOutdoor && 'Pas de tonte de pelouse pendant la canicule (gazon plus résistant si haut)',
+        ].filter(Boolean),
+      });
+    }
+    // Pluie abondante (> 20mm en un jour ou > 40mm sur 3 jours)
+    const totalRain3d = (d.precipitation_sum.slice(0, 3) || []).reduce((a, b) => a + (b || 0), 0);
+    if ((d.precipitation_sum[0] || 0) > 20 || totalRain3d > 40) {
+      out.push({
+        level: 'medium',
+        icon: '☔',
+        title: `Pluie abondante (${Math.round(totalRain3d)} mm prévus)`,
+        actions: [
+          'Inutile d\'arroser, vérifier juste le drainage des pots',
+          hasOutdoor && 'Reporter les traitements (bouillie bordelaise, purins) — ils seront lessivés',
+          hasOutdoor && 'Surveiller mildiou, oïdium, rouille les jours suivants',
+          hasOutdoor && 'Vérifier le tuteurage des plantes hautes (poids de l\'eau)',
+          'Vider les soucoupes d\'eau stagnante (intérieur et balcon)',
+        ].filter(Boolean),
+      });
+    }
+    // Vent fort
+    const maxWind = Math.max(...(d.wind_speed_10m_max.slice(0, 3) || [0]));
+    if (maxWind > 50) {
+      out.push({
+        level: maxWind > 80 ? 'high' : 'medium',
+        icon: '💨',
+        title: `Vent fort prévu (${Math.round(maxWind)} km/h)`,
+        actions: [
+          hasOutdoor && 'Tuteurer ou consolider les plantes hautes (tomates, dahlias, jeunes arbres)',
+          hasOutdoor && 'Rentrer les pots légers, jardinières instables',
+          hasOutdoor && 'Reporter les pulvérisations (dérive)',
+          hasOutdoor && 'Surveiller les arbres après le coup de vent (branches fendues)',
+        ].filter(Boolean),
+      });
+    }
+    // Sécheresse : peu de pluie sur 7 jours et chaleur
+    const total7d = (d.precipitation_sum || []).reduce((a, b) => a + (b || 0), 0);
+    const avgMaxTemp = (d.temperature_2m_max || []).reduce((a, b) => a + b, 0) / Math.max(1, d.temperature_2m_max.length);
+    if (total7d < 5 && avgMaxTemp > 22) {
+      out.push({
+        level: 'medium',
+        icon: '☀',
+        title: `Sécheresse persistante (${Math.round(total7d)} mm sur 7 j)`,
+        actions: [
+          hasOutdoor && 'Arroser en profondeur plutôt que souvent et superficiellement',
+          hasOutdoor && 'Pailler systématiquement tous les pieds',
+          hasOutdoor && 'Privilégier le soir ou tôt le matin',
+          hasOutdoor && 'Récupérer l\'eau de cuisson refroidie pour arroser',
+        ].filter(Boolean),
+      });
+    }
+    return out;
+  }, [forecast, plants]);
+
+  const palette = {
+    high:   { bg: '#fde7e3', border: '#c0392b', title: '#c0392b' },
+    medium: { bg: '#fef3e0', border: '#d97706', title: '#8a5b00' },
+    low:    { bg: '#dbeafe', border: '#2b6f9c', title: '#1e4f7a' },
+  };
+
+  return (
+    <div className="season-card" style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', cursor: alerts.length > 0 ? 'pointer' : 'default' }}
+           onClick={() => alerts.length > 0 && setCollapsed(c => !c)}>
+        <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.2rem', fontWeight: 400, margin: 0, marginRight: 'auto' }}>
+          ⛅ Alertes météo
+          {city && <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>· {city}</span>}
+          {forecast?.current && (
+            <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)', marginLeft: '0.5rem' }}>
+              · {Math.round(forecast.current.temperature_2m)}°C maintenant
+            </span>
+          )}
+        </h3>
+        {!coords && (
+          <button className="btn sm accent" onClick={(e) => { e.stopPropagation(); requestLocation(); }}>
+            📍 Activer la météo locale
+          </button>
+        )}
+        {coords && alerts.length > 0 && (
+          <span style={{ fontSize: '0.85rem', color: 'var(--ink-mute)' }}>{collapsed ? '▸ déplier' : '▾ replier'}</span>
+        )}
+      </div>
+
+      {error && <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', fontStyle: 'italic', marginTop: '0.5rem' }}>{error}</p>}
+      {loading && <p style={{ color: 'var(--ink-mute)', fontSize: '0.85rem', marginTop: '0.5rem' }}>Récupération de la météo…</p>}
+
+      {coords && !loading && alerts.length === 0 && forecast && (
+        <p style={{ color: 'var(--ink-mute)', fontSize: '0.9rem', marginTop: '0.5rem' }}>
+          ✓ Aucune alerte météo importante pour les 7 prochains jours. Tes plantes peuvent vivre tranquillement.
+        </p>
+      )}
+
+      {coords && alerts.length > 0 && !collapsed && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.75rem' }}>
+          {alerts.map((a, i) => {
+            const p = palette[a.level];
+            return (
+              <div key={i} style={{
+                background: p.bg,
+                borderLeft: `4px solid ${p.border}`,
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, color: p.title, fontSize: '0.95rem', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '1.2rem' }}>{a.icon}</span>
+                  {a.title}
+                </div>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                  {a.actions.map((act, j) => (
+                    <li key={j} style={{ display: 'flex', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--ink-soft)' }}>
+                      <span style={{ color: p.border, fontWeight: 700, flexShrink: 0 }}>→</span>
+                      <span style={{ flex: 1 }}>{act}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Vue d'ensemble du jardinier : aujourd'hui / semaine / mois / liste de courses
