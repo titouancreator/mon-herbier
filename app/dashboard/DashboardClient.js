@@ -707,6 +707,7 @@ function plantEmoji(plant) {
 
 // Composant alertes meteo : geolocalisation + Open-Meteo + alertes preventives
 function WeatherAlerts({ plants }) {
+  // V2 : approche 100% safe sans useMemo et avec dependances primitives
   const [coords, setCoords] = useState(null);
   const [city, setCity] = useState(null);
   const [forecast, setForecast] = useState(null);
@@ -764,20 +765,25 @@ function WeatherAlerts({ plants }) {
 
   // Calcule les alertes basees sur les previsions et les types de plantes
   const alerts = useMemo(() => {
+    try {
     if (!forecast || !forecast.daily) return [];
     const d = forecast.daily;
     const out = [];
-    const hasTypes = (types) => plants.some(p => types.includes(p.type));
+    const hasTypes = (types) => (plants || []).some(p => types.includes(p?.type));
     const hasOutdoor = hasTypes(['Fruitier', 'Potager', 'Aromatique', 'Fleur', 'Extérieur']);
     const hasIndoor = hasTypes(['Intérieur', 'Succulente']);
     const days = d.time || [];
+    const tmin = d.temperature_2m_min || [];
+    const tmax = d.temperature_2m_max || [];
+    const precip = d.precipitation_sum || [];
+    const wind = d.wind_speed_10m_max || [];
 
     // Gel cette nuit (J0)
-    if (d.temperature_2m_min[0] !== undefined && d.temperature_2m_min[0] < 0) {
+    if (tmin[0] !== undefined && tmin[0] < 0) {
       out.push({
-        level: d.temperature_2m_min[0] < -3 ? 'high' : 'medium',
+        level: tmin[0] < -3 ? 'high' : 'medium',
         icon: '❄',
-        title: `Gel cette nuit (${Math.round(d.temperature_2m_min[0])}°C)`,
+        title: `Gel cette nuit (${Math.round(tmin[0])}°C)`,
         actions: [
           hasOutdoor && 'Couvrir les jeunes plants et fleurs sensibles avec un voile d\'hivernage',
           hasOutdoor && 'Pailler épais le pied des fruitiers en floraison',
@@ -788,12 +794,12 @@ function WeatherAlerts({ plants }) {
     }
     // Gel prevu dans les jours suivants
     for (let i = 1; i < Math.min(4, days.length); i++) {
-      if (d.temperature_2m_min[i] !== undefined && d.temperature_2m_min[i] < 0) {
+      if (tmin[i] !== undefined && tmin[i] < 0) {
         const dayName = new Date(days[i]).toLocaleDateString('fr-FR', { weekday: 'long' });
         out.push({
-          level: d.temperature_2m_min[i] < -3 ? 'high' : 'medium',
+          level: tmin[i] < -3 ? 'high' : 'medium',
           icon: '🌡',
-          title: `Gel ${dayName} (${Math.round(d.temperature_2m_min[i])}°C)`,
+          title: `Gel ${dayName} (${Math.round(tmin[i])}°C)`,
           actions: [
             'Préparer les voiles d\'hivernage et les cloches',
             hasOutdoor && 'Surveiller les plants en floraison (fruitiers, légumes du potager)',
@@ -805,8 +811,8 @@ function WeatherAlerts({ plants }) {
     // Canicule : 3 jours consecutifs > 30°C
     let hotStreak = 0;
     let maxHot = 0;
-    for (let i = 0; i < Math.min(7, days.length); i++) {
-      if (d.temperature_2m_max[i] >= 30) { hotStreak++; maxHot = Math.max(maxHot, d.temperature_2m_max[i]); }
+    for (let i = 0; i < Math.min(7, tmax.length); i++) {
+      if (tmax[i] >= 30) { hotStreak++; maxHot = Math.max(maxHot, tmax[i]); }
       else { hotStreak = 0; }
     }
     if (hotStreak >= 2) {
@@ -824,8 +830,8 @@ function WeatherAlerts({ plants }) {
       });
     }
     // Pluie abondante (> 20mm en un jour ou > 40mm sur 3 jours)
-    const totalRain3d = (d.precipitation_sum.slice(0, 3) || []).reduce((a, b) => a + (b || 0), 0);
-    if ((d.precipitation_sum[0] || 0) > 20 || totalRain3d > 40) {
+    const totalRain3d = precip.slice(0, 3).reduce((a, b) => a + (b || 0), 0);
+    if ((precip[0] || 0) > 20 || totalRain3d > 40) {
       out.push({
         level: 'medium',
         icon: '☔',
@@ -840,7 +846,8 @@ function WeatherAlerts({ plants }) {
       });
     }
     // Vent fort
-    const maxWind = Math.max(...(d.wind_speed_10m_max.slice(0, 3) || [0]));
+    const wind3 = wind.slice(0, 3);
+    const maxWind = wind3.length > 0 ? Math.max(...wind3) : 0;
     if (maxWind > 50) {
       out.push({
         level: maxWind > 80 ? 'high' : 'medium',
@@ -855,8 +862,8 @@ function WeatherAlerts({ plants }) {
       });
     }
     // Sécheresse : peu de pluie sur 7 jours et chaleur
-    const total7d = (d.precipitation_sum || []).reduce((a, b) => a + (b || 0), 0);
-    const avgMaxTemp = (d.temperature_2m_max || []).reduce((a, b) => a + b, 0) / Math.max(1, d.temperature_2m_max.length);
+    const total7d = precip.reduce((a, b) => a + (b || 0), 0);
+    const avgMaxTemp = tmax.reduce((a, b) => a + b, 0) / Math.max(1, tmax.length);
     if (total7d < 5 && avgMaxTemp > 22) {
       out.push({
         level: 'medium',
@@ -871,6 +878,10 @@ function WeatherAlerts({ plants }) {
       });
     }
     return out;
+    } catch (e) {
+      console.error('WeatherAlerts compute error:', e);
+      return [];
+    }
   }, [forecast, plants]);
 
   const palette = {
