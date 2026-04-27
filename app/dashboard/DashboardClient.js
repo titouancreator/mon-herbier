@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
-import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant, getRecurringTasksForPlant, getShoppingList } from '@/lib/data';
+import { PLANT_LIBRARY, SYMPTOMS, DIAGNOSES, SEASONS, getTasksForPlant, getRecurringTasksForPlant, getShoppingList, downloadICS } from '@/lib/data';
 
 const LEAF_SVG = (
   <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
@@ -568,6 +568,51 @@ export default function DashboardClient({ initialPlants, userEmail }) {
             <div className="alert success" style={{ marginBottom: '1.25rem' }}>
               Saison actuelle : <strong>{currentSeason.name}</strong> · {MONTHS[new Date().getMonth()]}
             </div>
+
+            {/* EXPORT VERS APPLE / GOOGLE CALENDAR */}
+            {plants.length > 0 && (
+              <div style={{
+                background: 'white',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                padding: '1rem 1.25rem',
+                marginBottom: '1.25rem',
+                boxShadow: 'var(--shadow-sm)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 250px' }}>
+                    <h3 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.1rem', fontWeight: 400, margin: 0 }}>
+                      📲 Synchroniser avec ton calendrier
+                    </h3>
+                    <p style={{ color: 'var(--ink-mute)', fontSize: '0.82rem', margin: '0.2rem 0 0' }}>
+                      Tâches récurrentes (jour, semaine, mois, saison) + liste de courses dans Apple Calendar / Google Calendar / Outlook.
+                    </p>
+                  </div>
+                  <button
+                    className="btn accent"
+                    onClick={() => downloadICS(plants, currentSeason.id)}
+                  >
+                    ⬇ Télécharger .ics
+                  </button>
+                  <a
+                    className="btn sm"
+                    href="https://calendar.google.com/calendar/u/0/r/settings/export"
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Importer le fichier .ics téléchargé dans Google Calendar"
+                  >
+                    📅 Google Calendar
+                  </a>
+                  <span
+                    className="btn sm"
+                    title="Sur Mac : double-clic sur le .ics téléchargé. Sur iPhone : ouvrir le .ics depuis Mail ou Fichiers."
+                    style={{ cursor: 'help' }}
+                  >
+                    🍎 Apple Calendar
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* ALERTES METEO : prevention basee sur la meteo locale */}
             <WeatherAlerts plants={plants} />
@@ -1787,6 +1832,9 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
   const [notes, setNotes] = useState(plant?.notes || '');
   const [acquired, setAcquired] = useState(plant?.acquired || new Date().toISOString().split('T')[0]);
   const [photo, setPhoto] = useState(plant?.photo || null);
+  const [pdfUrl, setPdfUrl] = useState(plant?.pdf_url || null);
+  const [pdfName, setPdfName] = useState(plant?.pdf_name || null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
   // Champs détaillés (comme dans la bibliothèque)
   const [description, setDescription] = useState(plant?.description || '');
   const [plantation, setPlantation] = useState(plant?.plantation || '');
@@ -1828,12 +1876,37 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
     }
   }
 
+  async function handlePdf(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) { alert('PDF trop volumineux (max 20 Mo).'); return; }
+    setUploadingPdf(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Non connecté');
+      const safeName = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      const filename = `${user.id}/${Date.now()}-${safeName}`;
+      const { error: upErr } = await supabase.storage
+        .from('plant-photos')
+        .upload(filename, file, { contentType: file.type || 'application/pdf', upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage.from('plant-photos').getPublicUrl(filename);
+      setPdfUrl(publicUrl);
+      setPdfName(file.name);
+    } catch (err) {
+      alert("Impossible d'uploader le PDF : " + (err.message || err));
+    } finally {
+      setUploadingPdf(false);
+    }
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     setSaving(true);
     await onSave({
       id: plant?.id,
       name, latin, type, location, city, light, water, notes, acquired: acquired || null, photo,
+      pdf_url: pdfUrl, pdf_name: pdfName,
       description, plantation, propagation, harvest, companions, tips, problems,
     });
     setSaving(false);
@@ -1910,6 +1983,22 @@ function PlantForm({ plant, supabase, onSave, onDelete, onCancel }) {
           {photo && !uploading && <img src={photo} style={{ marginTop: '0.5rem', maxHeight: 160, borderRadius: 'var(--radius-sm)' }} alt="" />}
           {photo && !uploading && (
             <button type="button" className="btn sm" style={{ marginTop: '0.5rem' }} onClick={() => setPhoto(null)}>Retirer la photo</button>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label className="label">📄 Document PDF (facultatif — fiche technique, manuel, étiquette…)</label>
+          <input className="input" type="file" accept="application/pdf" onChange={handlePdf} disabled={uploadingPdf} />
+          {uploadingPdf && <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: 'var(--ink-mute)' }}>Envoi du PDF en cours…</div>}
+          {pdfUrl && !uploadingPdf && (
+            <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <a href={pdfUrl} target="_blank" rel="noreferrer" className="btn sm">
+                📄 Voir : {pdfName || 'document.pdf'}
+              </a>
+              <button type="button" className="btn sm danger" onClick={() => { setPdfUrl(null); setPdfName(null); }}>
+                Retirer le PDF
+              </button>
+            </div>
           )}
         </div>
 
@@ -2186,6 +2275,17 @@ function PlantDetailModal({ plant, onClose, onEdit, onDelete, onExportToLib }) {
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
               <button className="btn sm" onClick={onEdit}>Modifier</button>
+              {plant.pdf_url && (
+                <a
+                  className="btn sm accent"
+                  href={plant.pdf_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={plant.pdf_name || 'Document PDF'}
+                >
+                  📄 {plant.pdf_name ? (plant.pdf_name.length > 25 ? plant.pdf_name.slice(0, 22) + '…' : plant.pdf_name) : 'Document'}
+                </a>
+              )}
               {onExportToLib && <button className="btn sm" onClick={onExportToLib}>→ Bibliothèque</button>}
               <button className="btn sm danger" onClick={onDelete}>Supprimer</button>
             </div>
